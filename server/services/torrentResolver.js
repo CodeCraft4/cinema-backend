@@ -19,7 +19,7 @@ const PRIMARY_PROVIDERS = ["1337x", "TorrentGalaxy", "ThePirateBay", "Limetorren
 const SECONDARY_PROVIDERS = ["Yts", "Eztv", "KickassTorrents", "Torrentz2"];
 
 const JUNK_TITLE_RE = /\b(sample|trailer|teaser|camrip|telesync|screener)\b/i;
-const CONTAINER_RE = /\.(mkv|mp4)\b|\bx264\b|\bx265\b|\bhevc\b|\bweb[\s._-]*dl\b|\bblu[\s._-]?ray\b|\bhdrip\b/i;
+const CONTAINER_RE = /\.(mkv|mp4|avi|webm)\b|\bx264\b|\bx265\b|\bhevc\b|\bweb[\s._-]*dl\b|\bblu[\s._-]?ray\b|\bhdrip\b|\bwebrip\b|\bbrrip\b|\bdvdrip\b|\bhdtv\b|\baac\b/i;
 const DUB_MARKER_RE = /\b(hindi|hin|urdu|dual|multi|dubbed|dha)\b/i;
 const INDIAN_INDUSTRY_RE = /\b(india|indian|bollywood|tollywood|kollywood|mollywood|sandalwood|hindi|tamil|telugu|malayalam|kannada)\b|\b(hi|ta|te|ml|kn|in)\b/i;
 
@@ -206,20 +206,21 @@ function acceptTorrentRelease({ title, sizeBytes, size, quality, mediaType, meta
   const name = String(title || "");
   const extra = String(metadata || "");
   if (!name || JUNK_TITLE_RE.test(name) || JUNK_TITLE_RE.test(extra)) return { ok: false };
-  if (!hasCleanContainer(name, extra)) return { ok: false };
+  if (!hasCleanContainer(name, extra) && !quality) return { ok: false };
 
   const bytes = parseByteSize(sizeBytes, size, extra);
   if (!bytes) return { ok: false };
   if (seeders != null && Number(seeders) < MIN_SEEDERS) return { ok: false };
 
+  const detected = detectQuality(quality) || detectQuality(name) || detectQuality(extra) || "1080p";
   const kind = releaseKind(`${name} ${extra}`, mediaType);
   if (kind === "season") {
     if (bytes <= SEASON_PACK_FLOOR_BYTES) return { ok: false };
-  } else if (bytes < (kind === "episode" ? EPISODE_FLOOR_BYTES : MOVIE_FLOOR_BYTES)) {
-    return { ok: false };
+  } else {
+    const floor = kind === "episode" ? EPISODE_FLOOR_BYTES : detected === "480p" ? 200 * MB : MOVIE_FLOOR_BYTES;
+    if (bytes < floor) return { ok: false };
   }
 
-  const detected = detectQuality(quality) || detectQuality(name) || detectQuality(extra) || "1080p";
   return { ok: true, quality: detected, size_bytes: bytes, size_human: formatSize(bytes), kind };
 }
 
