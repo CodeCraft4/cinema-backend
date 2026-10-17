@@ -288,6 +288,11 @@ async function ingestTvShow(supabase, tmdbShow) {
   const posterUrl = tmdbShow.poster_path ? `https://image.tmdb.org/t/p/w500${tmdbShow.poster_path}` : "";
   const backdropUrl = tmdbShow.backdrop_path ? `https://image.tmdb.org/t/p/w1280${tmdbShow.backdrop_path}` : "";
 
+  const genres = tmdbShow.genre_ids || [];
+  if (genres.some((g) => [16, 10767, 10763, 10764].includes(g))) {
+    return { status: "skip", title };
+  }
+
   // 1. Upsert show into media_content
   await supabase.from(MEDIA_CONTENT_TABLE).upsert({
     external_id: showId,
@@ -315,10 +320,10 @@ async function ingestTvShow(supabase, tmdbShow) {
   let totalEps = 0;
   let packFound = false;
 
-  // 2. Fetch seasons details from TMDB
+  // 2. Fetch seasons details from TMDB (cap to max 8 seasons for dramas)
   try {
     const detailRes = await axios.get(`https://api.themoviedb.org/3/tv/${showId}?api_key=${TMDB_API_KEY}`, { timeout: 4000 });
-    const seasons = (detailRes.data?.seasons || []).filter((s) => s.season_number > 0);
+    const seasons = (detailRes.data?.seasons || []).filter((s) => s.season_number > 0).slice(0, 8);
 
     for (const season of seasons) {
       const sNum = season.season_number;
@@ -475,7 +480,7 @@ async function main() {
     for (let page = startPage; page <= maxPages; page++) {
       const pageT0 = Date.now();
       try {
-        const url = `https://api.themoviedb.org/3/discover/tv?api_key=${TMDB_API_KEY}&first_air_date.gte=2000-01-01&first_air_date.lte=2026-12-31&without_genres=16&with_original_language=${cat.lang}&sort_by=popularity.desc&page=${page}`;
+        const url = `https://api.themoviedb.org/3/discover/tv?api_key=${TMDB_API_KEY}&first_air_date.gte=2000-01-01&first_air_date.lte=2026-12-31&without_genres=16,10767,10763,10764&with_original_language=${cat.lang}&sort_by=popularity.desc&page=${page}`;
         const res = await axios.get(url, { timeout: 6000 });
         const results = res.data?.results || [];
 
