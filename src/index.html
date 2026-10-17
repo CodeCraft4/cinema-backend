@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cinebroad</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+    />
+  </head>
+  <body>
+    <div class="app-shell">
+      <nav class="nav-rail" aria-label="Main">
+        <div class="nav-top">
+          <button class="nav-logo" title="Cinebroad" type="button" onclick="navigateTo('home')">
+            <img src="assets/cinebroad-logo.png" alt="Cinebroad" />
+          </button>
+        </div>
+
+        <div class="nav-group">
+          <button class="nav-btn" data-page="search" title="Search" type="button">
+            <i class="fas fa-magnifying-glass"></i>
+          </button>
+          <button class="nav-btn active" data-page="home" title="Home" type="button">
+            <i class="fas fa-house"></i>
+          </button>
+          <button class="nav-btn" data-page="movies" title="Movies" type="button">
+            <i class="fas fa-clapperboard"></i>
+          </button>
+          <button class="nav-btn" data-page="tv-shows" title="TV Shows" type="button">
+            <i class="fas fa-tv"></i>
+          </button>
+          <button class="nav-btn" data-page="favorites" title="Favorites" type="button">
+            <i class="fas fa-bookmark"></i>
+          </button>
+          <button class="nav-btn" data-page="downloads" title="Downloads" type="button">
+            <i class="fas fa-download"></i>
+            <span id="activeCount" class="nav-badge" style="display: none">0</span>
+          </button>
+        </div>
+      </nav>
+
+      <main class="main-pane">
+        <div id="offlineStatus" class="offline-status" hidden role="status">
+          <i class="fas fa-cloud-slash"></i>
+          <span>Offline Mode: downloaded movies and cached content only</span>
+        </div>
+        <!-- SEARCH -->
+        <section id="page-search" class="page">
+          <header class="page-header">
+            <h1 class="page-title">Search</h1>
+          </header>
+
+          <div class="search-row">
+            <div class="search-input-wrap">
+              <i class="fas fa-magnifying-glass" onclick="search()" style="cursor:pointer"></i>
+              <input
+                type="text"
+                id="searchInput"
+                placeholder="Search movies, TV shows, genres..."
+                onkeypress="handleEnter(event)"
+              />
+              <button id="cancelSearchBtn" class="clear-search-btn" onclick="cancelSearch()" style="display: none" type="button">
+                <i class="fas fa-xmark"></i>
+              </button>
+            </div>
+            <button class="filters-toggle-btn" id="filtersToggleBtn" onclick="toggleFiltersPanel()" type="button">
+              Filters <i class="fas fa-sliders"></i>
+            </button>
+          </div>
+
+          <div id="filtersPanel" class="filters-panel">
+            <div class="filter-group">
+              <label for="languageFilter">Language</label>
+              <select id="languageFilter" onchange="applyFilters()">
+                <option value="all" selected>All</option>
+                <option value="hindi">Hindi Dubbed</option>
+                <option value="english">English</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label for="countryFilter">Country</label>
+              <select id="countryFilter" onchange="applyFilters()">
+                <option value="all" selected>All countries</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label for="qualityFilter">Quality</label>
+              <select id="qualityFilter" onchange="applyFilters()">
+                <option value="all" selected>Any</option>
+                <option value="1080p">1080p</option>
+                <option value="2160p">4K / 2160p</option>
+                <option value="720p">720p</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label for="sortFilter">Sort</label>
+              <select id="sortFilter" onchange="applyFilters()">
+                <option value="seeds_desc">Seeds: High → Low</option>
+                <option value="seeds_asc">Seeds: Low → High</option>
+                <option value="size_desc">Size: Big → Small</option>
+                <option value="size_asc">Size: Small → Big</option>
+              </select>
+            </div>
+            <span id="resultCount" class="filter-stats"></span>
+          </div>
+
+          <div class="section-head" id="searchSectionHead" style="display: none">
+            <span class="section-accent"></span>
+            <h2 id="searchSectionTitle">Results</h2>
+          </div>
+
+          <div class="results-container" id="searchResultsContainer" style="display: none">
+            <div id="resultsGrid" class="poster-grid fit-row"></div>
+            <div id="searchScrollSentinel" class="scroll-sentinel" aria-hidden="true"></div>
+            <div id="searchScrollStatus" class="scroll-status"></div>
+            <div id="paginationContainer" class="pagination-container" style="display: none">
+              <button id="previousPageBtn" onclick="changePage(-1)" class="page-btn" type="button">
+                <i class="fas fa-chevron-left"></i>
+              </button>
+              <span id="pageStatus" class="page-status"></span>
+              <button id="nextPageBtn" onclick="changePage(1)" class="page-btn" type="button">
+                <i class="fas fa-chevron-right"></i>
+              </button>
+            </div>
+          </div>
+
+          <div id="emptyState" class="empty-state search-idle">
+            <i class="fas fa-magnifying-glass"></i>
+            <p>try to search</p>
+          </div>
+        </section>
+
+        <!-- HOME -->
+        <section id="page-home" class="page active">
+          <header class="page-header">
+            <h1 class="page-title">Home</h1>
+          </header>
+
+          <section class="year-row" id="homeLatestSection" hidden>
+            <div class="section-head year-row-head" id="homeLatestHead">
+              <span class="section-accent"></span>
+              <h2 id="homeLatestTitle">New &amp; Latest Movies</h2>
+              <div class="row-slider-controls">
+                <button class="row-slider-btn" data-home-row="latest" data-row-action="prev" type="button" title="Previous movies" disabled>
+                  <i class="fas fa-chevron-left"></i>
+                </button>
+                <button class="row-slider-btn" data-home-row="latest" data-row-action="next" type="button" title="Next movies" disabled>
+                  <i class="fas fa-chevron-right"></i>
+                </button>
+              </div>
+            </div>
+            <div class="poster-row-viewport">
+              <div id="homeLatestRow" class="poster-row"></div>
+            </div>
+          </section>
+
+          <section class="year-row" id="homeTrendingSection" hidden>
+            <div class="section-head year-row-head" id="homeTrendingHead">
+              <span class="section-accent"></span>
+              <h2 id="homeTrendingTitle">Most Trending Movies</h2>
+              <div class="row-slider-controls">
+                <button class="row-slider-btn" data-home-row="trending" data-row-action="prev" type="button" title="Previous movies" disabled>
+                  <i class="fas fa-chevron-left"></i>
+                </button>
+                <button class="row-slider-btn" data-home-row="trending" data-row-action="next" type="button" title="Next movies" disabled>
+                  <i class="fas fa-chevron-right"></i>
+                </button>
+              </div>
+            </div>
+            <div class="poster-row-viewport">
+              <div id="homeTrendingRow" class="poster-row"></div>
+            </div>
+          </section>
+
+          <div class="section-head">
+            <span class="section-accent"></span>
+            <h2>Trending &amp; Highly Rated</h2>
+          </div>
+          <div id="homeGrid" class="poster-grid fit-row"></div>
+          <div id="homeScrollSentinel" class="scroll-sentinel" aria-hidden="true"></div>
+          <div id="homeScrollStatus" class="scroll-status"></div>
+        </section>
+
+        <!-- MOVIES -->
+        <section id="page-movies" class="page">
+          <header class="page-header">
+            <h1 class="page-title">Movies</h1>
+          </header>
+          <div id="moviesYearRows" class="year-rows"></div>
+          <div id="moviesScrollSentinel" class="scroll-sentinel" aria-hidden="true"></div>
+          <div id="moviesScrollStatus" class="scroll-status"></div>
+        </section>
+
+        <!-- TV SHOWS -->
+        <section id="page-tv-shows" class="page">
+          <header class="page-header tv-shows-header">
+            <h1 class="page-title">TV Shows</h1>
+            <div class="tv-search-wrap">
+              <i class="fas fa-magnifying-glass"></i>
+              <input
+                type="text"
+                id="tvSearchInput"
+                placeholder="Search TV shows by name..."
+                autocomplete="off"
+                spellcheck="false"
+                onkeydown="handleTvSearchEnter(event)"
+              />
+              <button
+                id="tvSearchClearBtn"
+                class="clear-search-btn"
+                type="button"
+                title="Clear search"
+                onclick="clearTvSearch()"
+                style="display: none"
+              >
+                <i class="fas fa-xmark"></i>
+              </button>
+            </div>
+          </header>
+          <div id="tvShowCategories" class="tv-category-rows"></div>
+          <div id="tvShowsGrid" class="poster-grid" hidden></div>
+          <div id="tvShowsEmpty" class="empty-state tv-shows-empty" hidden>
+            <i class="fas fa-tv"></i>
+            <p>No TV shows found</p>
+          </div>
+          <div id="tvShowsScrollSentinel" class="scroll-sentinel" aria-hidden="true"></div>
+          <div id="tvShowsScrollStatus" class="scroll-status"></div>
+        </section>
+
+        <!-- FAVORITES -->
+        <section id="page-favorites" class="page">
+          <header class="page-header">
+            <h1 class="page-title">Favorites</h1>
+          </header>
+          <div id="favoritesGrid" class="poster-grid"></div>
+          <div id="favoritesEmpty" class="empty-state">
+            <i class="fas fa-bookmark"></i>
+            <p>No favorites yet — tap the bookmark on any poster</p>
+          </div>
+        </section>
+
+        <!-- DOWNLOADS -->
+        <section id="page-downloads" class="page">
+          <header class="page-header downloads-header">
+            <h1 class="page-title">Downloads</h1>
+            <div class="downloads-header-right">
+              <div class="network-speed" id="networkSpeed" title="Combined download speed">
+                <i class="fas fa-wifi"></i>
+                <span id="networkSpeedValue">0 B/s</span>
+              </div>
+              <div class="downloads-path">
+                <label>Save to</label>
+                <div class="path-row">
+                  <input type="text" id="pathDisplay" readonly />
+                  <button type="button" onclick="changeFolder()" title="Change folder">
+                    <i class="fas fa-folder-open"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </header>
+          <div id="downloadList" class="download-list"></div>
+          <div id="downloadsEmpty" class="empty-state" hidden>
+            <i class="fas fa-download"></i>
+            <p>No active downloads</p>
+            <small>Closing the window keeps downloads running in the tray</small>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="tvDetailsModal" class="tv-details-modal" hidden>
+      <div class="tv-details-shell" role="dialog" aria-modal="true" aria-labelledby="tvDetailsTitle">
+        <button id="tvDetailsClose" class="tv-details-close" type="button" title="Close">
+          <i class="fas fa-xmark"></i>
+        </button>
+        <div class="tv-details-grid">
+          <div class="tv-details-poster-col">
+            <img id="tvDetailsPoster" class="tv-details-poster" alt="" />
+          </div>
+          <div class="tv-details-copy">
+            <h2 id="tvDetailsTitle">TV Show</h2>
+            <div id="tvDetailsMeta" class="tv-details-meta"></div>
+            <label class="tv-language-field" for="tvLanguageSelect">Language
+              <select id="tvLanguageSelect">
+                <option value="hindi" selected>Hindi Dubbed</option>
+                <option value="english">English</option>
+                <option value="original">Original language</option>
+              </select>
+            </label>
+            <div id="tvSeasonTabs" class="tv-season-tabs"></div>
+            <div id="tvEpisodes" class="tv-episodes"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- In-app professional preview player -->
+    <div id="playerModal" class="player-modal" hidden>
+      <div class="player-shell" id="playerShell">
+        <div class="player-topbar">
+          <div class="player-title-wrap">
+            <span class="player-kicker">Preview</span>
+            <h2 id="playerTitle">Movie</h2>
+          </div>
+          <div class="player-top-actions">
+            <button type="button" id="playerOpenFolderBtn" class="player-icon-btn" title="Open download folder">
+              <i class="fas fa-folder-open"></i>
+            </button>
+            <button type="button" id="playerExternalBtn" class="player-icon-btn" title="Open in system player">
+              <i class="fas fa-arrow-up-right-from-square"></i>
+            </button>
+            <button type="button" id="playerCloseBtn" class="player-icon-btn danger" title="Close">
+              <i class="fas fa-xmark"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="player-stage" id="playerStage">
+          <video id="playerVideo" playsinline></video>
+          <div class="player-tap-zones" id="playerTapZones" aria-hidden="true">
+            <div class="tap-zone left" data-seek="-10"></div>
+            <div class="tap-zone right" data-seek="10"></div>
+          </div>
+          <div class="player-seek-flash" id="playerSeekFlash" hidden></div>
+          <div class="player-buffering" id="playerBuffering" hidden>
+            <div class="dots-loader"><span></span><span></span><span></span></div>
+            <p>Buffering preview…</p>
+          </div>
+          <div class="player-error" id="playerError" hidden>
+            <p id="playerErrorText">Unable to play this format in-app.</p>
+            <button type="button" id="playerErrorExternalBtn" class="player-primary-btn">
+              Open in system player
+            </button>
+          </div>
+        </div>
+
+        <div class="player-controls">
+          <div class="player-progress-wrap">
+            <input type="range" id="playerSeek" min="0" max="1000" value="0" step="1" />
+          </div>
+          <div class="player-controls-row">
+            <div class="player-left-controls">
+              <button type="button" id="playerRewindBtn" class="player-icon-btn" title="Back 10s">
+                <i class="fas fa-rotate-left"></i>
+              </button>
+              <button type="button" id="playerPlayBtn" class="player-play-btn" title="Play / Pause">
+                <i class="fas fa-play"></i>
+              </button>
+              <button type="button" id="playerForwardBtn" class="player-icon-btn" title="Forward 10s">
+                <i class="fas fa-rotate-right"></i>
+              </button>
+              <span id="playerTime" class="player-time">0:00 / 0:00</span>
+            </div>
+            <div class="player-right-controls">
+              <button type="button" id="playerMuteBtn" class="player-icon-btn" title="Mute">
+                <i class="fas fa-volume-high"></i>
+              </button>
+              <input type="range" id="playerVolume" class="player-volume" min="0" max="1" step="0.01" value="0.9" />
+              <button type="button" id="playerFsBtn" class="player-icon-btn" title="Fullscreen">
+                <i class="fas fa-expand"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="toastStack" class="toast-stack" aria-live="polite"></div>
+    <script src="searchFilters.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>

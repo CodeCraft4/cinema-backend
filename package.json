@@ -1,0 +1,122 @@
+{
+  "name": "cinebroad-api",
+  "version": "1.1.3",
+  "description": "Media Catalog, Metadata and Stream Aggregation Service",
+  "main": "src/main.js",
+  "author": "Ghdb Ashen",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "server": "node server/index.js",
+    "server:dev": "node --watch server/index.js",
+    "verify:supabase": "node scripts/verify-supabase-setup.js",
+    "test:media-cache": "node scripts/test-media-cache-logic.js",
+    "test:item-store": "node scripts/test-item-store.js",
+    "test:torrent-search": "node scripts/test-torrent-search.js",
+    "test:torrent-db": "node scripts/test-torrent-db.js",
+    "test:download-smoke": "node scripts/test-download-smoke.js",
+    "test:search-filters": "node scripts/test-search-filters.js",
+    "test:stream-resolver": "node scripts/test-stream-resolver.js",
+    "test:backfill-helpers": "node scripts/test-backfill-helpers.js",
+    "db:migrate": "node scripts/apply-migration.js",
+    "cache:refresh": "node scripts/refresh-all-cache.js",
+    "cache:health": "node scripts/cache-health.js",
+    "enrich": "node scripts/enrichCatalogSources.js",
+    "catalog:enrich": "node scripts/enrichCatalogSources.js",
+    "resolve:quality": "node scripts/multiQualityHindiStreamEngine.js",
+    "resolve:series": "node scripts/fullSeriesHindiResolver.js",
+    "find:hindi": "node scripts/fastDirectHindiFinder.js",
+    "find:all": "node scripts/fastDirectHindiFinder.js && node scripts/fullSeriesHindiResolver.js",
+    "fetch:korean": "node scripts/fetchKoreanTopSeries.js",
+    "fetch:turkish": "node scripts/fetchTurkishCatalog.js",
+    "find:turkish": "node scripts/fastTurkishTorrentFinder.js",
+    "ingest:hollywood": "node scripts/ingestHollywoodSeries300.js",
+    "ingest:korean": "node scripts/ingestKoreanDramasWithEpisodes.js",
+    "fetch:globalseries": "node scripts/fetchGlobalTopSeries.js",
+    "fetch:series": "node scripts/fetchTopSeriesCatalog.js",
+    "fix:posters": "node scripts/backfillMediaSourcePosters.js",
+    "clean:ddl": "node scripts/cleanFakeDDLSources.js",
+    "purge:english": "node scripts/purgeNonHindiDualSources.js",
+    "purge:series": "node scripts/purgeAllSeriesAndEpisodes.js",
+    "ingest:hindi": "node scripts/ingestHindiFeeds.js",
+    "dist": "node scripts/win-dist.js",
+    "dist:dir": "npx electron-builder --win --dir --config.win.signAndEditExecutable=false",
+    "ingest:asian": "node scripts/ingestAsianSeries300.js",
+    "ingest:desi": "node scripts/ingestDesiSeries300.js"
+  },
+  "build": {
+    "appId": "com.cinebroad.app",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "GHDBASHEN",
+        "repo": "Dolphin-Movie-Downloader"
+      }
+    ],
+    "productName": "Cinebroad",
+    "directories": {
+      "output": "dist"
+    },
+    "forceCodeSigning": false,
+    "win": {
+      "target": "nsis",
+      "publish": [
+        "github"
+      ],
+      "icon": "icon.ico",
+      "signAndEditExecutable": false
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "icon.png",
+      "category": "Video"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "icon.icns",
+      "category": "public.app-category.entertainment",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "icon": "icon.icns"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Cinebroad"
+    }
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.0",
+    "@tanstack/query-core": "^5.103.2",
+    "axios": "^1.20.0",
+    "dotenv": "^18.0.2",
+    "electron-updater": "^6.6.2",
+    "express": "^5.2.1",
+    "torrent-search-api": "^2.1.4",
+    "torrent-stream": "^1.2.1"
+  },
+  "devDependencies": {
+    "electron": "^39.2.6",
+    "electron-builder": "^24.13.3"
+  }
+}
