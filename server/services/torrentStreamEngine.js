@@ -348,8 +348,8 @@ async function getOrStartEngine(magnetOrHash, { timeoutMs = 35000 } = {}) {
   record.readyPromise = new Promise((resolve, reject) => {
     let settled = false;
 
-    // Buffers parse in <100ms; magnets get up to 7s for DHT peer discovery before instant cloud failover
-    const effectiveTimeout = torrentSource instanceof Buffer ? 5000 : 7000;
+    // Buffers parse in <100ms; magnets get up to 15s for DHT peer discovery before cloud failover
+    const effectiveTimeout = torrentSource instanceof Buffer ? 5000 : 15000;
     const timeoutTimer = setTimeout(() => {
       if (settled) return;
       settled = true;

@@ -32,10 +32,8 @@ const handleTorrentStream = asyncHandler(async (req, res) => {
   const ep = req.query.episode || req.query.ep;
   const s = req.query.season || req.query.s;
 
-  // Safe Cloud Mode (Railway Protected):
-  // Railway and shared cloud hosts ban P2P BitTorrent traffic with "ToS Violation".
-  // Unless explicitly enabled (ENABLE_P2P_TORRENT=true on dedicated VPS), instantly route to direct high-speed CDN stream!
-  const enableP2P = process.env.ENABLE_P2P_TORRENT === "true";
+  // P2P Streaming Engine: Enabled by default on dedicated VPS.
+  const enableP2P = process.env.ENABLE_P2P_TORRENT !== "false";
   if (!enableP2P && infoHash) {
     try {
       const { getSupabaseClient } = require("../services/supabaseClient");
@@ -60,7 +58,6 @@ const handleTorrentStream = asyncHandler(async (req, res) => {
         return res.redirect(302, streamUrl);
       }
 
-      // If tmdbId is not found in database, redirect to autoembed rather than hanging on torrent swarm
       console.warn(`[SafeCloudMode] tmdbId not found for ${infoHash}, redirecting to fallback embed stream`);
       return res.redirect(302, `https://player.autoembed.cc/embed/movie/${infoHash}`);
     } catch (err) {
