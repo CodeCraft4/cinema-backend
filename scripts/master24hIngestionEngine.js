@@ -412,22 +412,11 @@ async function ingestTvShow(supabase, tmdbShow) {
   return { status: "ok", title, year, totalEps, packFound };
 }
 
-async function main() {
-  console.log("===============================================================================");
-  console.log(" 👑 Master 24-Hour Autonomous Ingestion & Multi-Quality Engine");
-  console.log(" 🚫 NO ANIMATION / ANIME · 🎯 2000-2026 · ⚡ 480p, 720p, 1080p Hindi");
-  console.log("===============================================================================\n");
-
-  const supabase = getSupabaseClient();
-  const cp = readCheckpoint();
-
-  console.log(`📌 Starting with Checkpoint: Movie Category [${cp.movieCategoryIndex}], Movie Page [${cp.moviePage}]`);
-
-  // --- LOOP 1: MOVIES ---
+async function ingestMoviesLoop(supabase, cp) {
   console.log("\n🎬 --- PHASE 1: DISCOVERING & INGESTING MOVIES (2000 - 2026) ---");
   for (let catIdx = cp.movieCategoryIndex; catIdx < MOVIE_CATEGORIES.length; catIdx++) {
     const cat = MOVIE_CATEGORIES[catIdx];
-    console.log(`\n📂 [Category ${catIdx + 1}/${MOVIE_CATEGORIES.length}] ${cat.name} (Lang: ${cat.lang})`);
+    console.log(`\n📂 [Movie Category ${catIdx + 1}/${MOVIE_CATEGORIES.length}] ${cat.name} (Lang: ${cat.lang})`);
 
     const startPage = catIdx === cp.movieCategoryIndex ? cp.moviePage : 1;
     const maxPages = cat.maxPages || 350;
@@ -459,19 +448,19 @@ async function main() {
         cp.moviePage = page + 1;
         cp.movieCategoryIndex = catIdx;
         writeCheckpoint(cp);
-        console.log(`  📄 Page ${page} complete in ${((Date.now() - pageT0) / 1000).toFixed(1)}s (Total Movies: ${cp.totalMoviesAdded}, Sources: ${cp.totalSourcesAdded})`);
+        console.log(`  📄 Movie Page ${page} complete in ${((Date.now() - pageT0) / 1000).toFixed(1)}s (Total Movies: ${cp.totalMoviesAdded}, Sources: ${cp.totalSourcesAdded})`);
       } catch (err) {
-        console.warn(`  ⚠️ Page ${page} error: ${err.message}. Retrying in 2s...`);
+        console.warn(`  ⚠️ Movie Page ${page} error: ${err.message}. Retrying in 2s...`);
         await sleep(2000);
       }
     }
-    // Reset page for next category
     cp.moviePage = 1;
     cp.movieCategoryIndex = catIdx + 1;
     writeCheckpoint(cp);
   }
+}
 
-  // --- LOOP 2: SERIES & TV SHOWS ---
+async function ingestSeriesLoop(supabase, cp) {
   console.log("\n📺 --- PHASE 2: DISCOVERING & INGESTING WEB SERIES & DRAMAS ---");
   for (let catIdx = cp.seriesCategoryIndex; catIdx < TV_CATEGORIES.length; catIdx++) {
     const cat = TV_CATEGORIES[catIdx];
@@ -515,6 +504,32 @@ async function main() {
     cp.seriesPage = 1;
     cp.seriesCategoryIndex = catIdx + 1;
     writeCheckpoint(cp);
+  }
+}
+
+async function main() {
+  console.log("===============================================================================");
+  console.log(" 👑 Master 24-Hour Autonomous Ingestion & Multi-Quality Engine");
+  console.log(" 🚫 NO ANIMATION / ANIME · 🎯 2000-2026 · ⚡ 480p, 720p, 1080p Hindi");
+  console.log("===============================================================================\n");
+
+  const supabase = getSupabaseClient();
+  const cp = readCheckpoint();
+
+  console.log(`📌 Starting with Checkpoint: Movies [Cat ${cp.movieCategoryIndex}, P${cp.moviePage}] | Series [Cat ${cp.seriesCategoryIndex}, P${cp.seriesPage}]`);
+
+  const mode = process.argv.find((a) => a.startsWith("--mode="))?.split("=")[1] || "all";
+
+  if (mode === "movies") {
+    await ingestMoviesLoop(supabase, cp);
+  } else if (mode === "series") {
+    await ingestSeriesLoop(supabase, cp);
+  } else {
+    // Run both Movies and Series concurrently!
+    await Promise.all([
+      ingestMoviesLoop(supabase, cp),
+      ingestSeriesLoop(supabase, cp),
+    ]);
   }
 
   console.log("\n===============================================================================");
