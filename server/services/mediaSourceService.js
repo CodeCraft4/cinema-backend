@@ -335,7 +335,7 @@ async function resolvePosterAndBackdrop(params, release, rawMediaId) {
   if (!posterUrl && (rawMediaId || params?.title)) {
     try {
       const supabase = getSupabaseClient();
-      const baseId = rawMediaId ? String(rawMediaId).split(":")[0] : null;
+      const baseId = rawMediaId ? String(rawMediaId).split(/[-:]/)[0] : null;
       let data = null;
 
       if (baseId && /^\d+$/.test(baseId)) {
@@ -374,7 +374,7 @@ async function resolvePosterAndBackdrop(params, release, rawMediaId) {
   if (!posterUrl && tmdbKey && (rawMediaId || params?.title)) {
     try {
       const axios = require("axios");
-      const baseId = rawMediaId ? String(rawMediaId).split(":")[0] : null;
+      const baseId = rawMediaId ? String(rawMediaId).split(/[-:]/)[0] : null;
       const isNum = baseId && /^\d+$/.test(baseId) && Number(baseId) > 0;
       const isTv = params?.mediaType === "series" || params?.mediaType === "tv";
 
@@ -928,8 +928,8 @@ async function saveTorrentRelease(params, release) {
       primary: Boolean(release.primary),
       resolvedAt: new Date().toISOString(),
       overview: meta.overview,
-      poster_url: meta.posterUrl,
-      series_poster_url: meta.posterUrl,
+      poster_url: params.seriesPosterUrl || params.series_poster_url || meta.posterUrl,
+      series_poster_url: params.seriesPosterUrl || params.series_poster_url || meta.posterUrl,
       still_url: params.stillUrl || params.still_url || null,
       backdrop_url: meta.backdropUrl,
       rating: meta.rating,
