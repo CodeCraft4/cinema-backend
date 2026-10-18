@@ -20,7 +20,8 @@ const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 
-const { getSupabaseClient, MEDIA_CONTENT_TABLE, MEDIA_SOURCES_TABLE, MEDIA_EPISODES_TABLE } = require("../server/services/supabaseClient");
+const { getSupabaseClient, MEDIA_CONTENT_TABLE, MEDIA_SOURCES_TABLE } = require("../server/services/supabaseClient");
+const MEDIA_EPISODES_TABLE = "media_episodes";
 const { saveTorrentRelease } = require("../server/services/mediaSourceService");
 const { cleanSearchTitle, discoverCascadingTorrents, rankValidReleases, detectQuality } = require("../server/services/torrentResolver");
 
@@ -89,16 +90,18 @@ function writeCheckpoint(data) {
 }
 
 const MOVIE_CATEGORIES = [
-  { name: "Hollywood (English Popular)", lang: "en" },
-  { name: "Bollywood (Hindi)", lang: "hi" },
-  { name: "South Indian (Tollywood / Kollywood)", lang: "te|ta|ml|kn" },
+  { name: "Hollywood (English Popular)", lang: "en", maxPages: 350 },
+  { name: "Bollywood (Hindi)", lang: "hi", maxPages: 350 },
+  { name: "South Indian (Tollywood / Kollywood / Mollywood / Sandalwood)", lang: "te|ta|ml|kn", maxPages: 350 },
+  { name: "Pan-Asian & Global Action (Hindi Dubbed)", lang: "ko|zh|ja|tr|es|fr", maxPages: 250 },
 ];
 
 const TV_CATEGORIES = [
-  { name: "Hollywood Web Series", lang: "en" },
-  { name: "Korean Dramas (K-Drama)", lang: "ko" },
-  { name: "Chinese & Japanese Dramas", lang: "zh|ja" },
-  { name: "Desi Hindi Web Series", lang: "hi" },
+  { name: "Hollywood Web Series", lang: "en", maxPages: 150 },
+  { name: "Korean Dramas (K-Drama)", lang: "ko", maxPages: 150 },
+  { name: "Chinese & Japanese Dramas", lang: "zh|ja", maxPages: 150 },
+  { name: "Desi Hindi Web Series", lang: "hi", maxPages: 150 },
+  { name: "Turkish Dramas", lang: "tr", maxPages: 100 },
 ];
 
 async function fetchTorrentioTiers(imdbId, title, isNativeHindi = false) {
@@ -255,12 +258,12 @@ async function ingestMovie(supabase, tmdbMovie) {
 
   // 1. Immediately upsert into media_content so it's live in catalog instantly
   await supabase.from(MEDIA_CONTENT_TABLE).upsert({
-    external_id: mediaId,
+    external_id: parseInt(mediaId, 10),
     source: "tmdb",
     title,
     media_type: "movie",
     details: {
-      id: tmdbMovie.id,
+      id: parseInt(mediaId, 10),
       title,
       year,
       overview: tmdbMovie.overview,
@@ -274,7 +277,7 @@ async function ingestMovie(supabase, tmdbMovie) {
       original_language: tmdbMovie.original_language,
     },
     updated_at: new Date().toISOString(),
-  }, { onConflict: "external_id,source" });
+  }, { onConflict: "source,media_type,external_id" });
 
   // 2. Fetch multi-qualities (1080p, 720p, 480p)
   const savedTiers = await resolveMovieQualities(tmdbMovie);
@@ -295,12 +298,12 @@ async function ingestTvShow(supabase, tmdbShow) {
 
   // 1. Upsert show into media_content
   await supabase.from(MEDIA_CONTENT_TABLE).upsert({
-    external_id: showId,
+    external_id: parseInt(showId, 10),
     source: "tmdb",
     title,
     media_type: "tv",
     details: {
-      id: tmdbShow.id,
+      id: parseInt(showId, 10),
       name: title,
       title,
       year,
@@ -315,7 +318,7 @@ async function ingestTvShow(supabase, tmdbShow) {
       original_language: tmdbShow.original_language,
     },
     updated_at: new Date().toISOString(),
-  }, { onConflict: "external_id,source" });
+  }, { onConflict: "source,media_type,external_id" });
 
   let totalEps = 0;
   let packFound = false;
@@ -371,7 +374,7 @@ async function ingestTvShow(supabase, tmdbShow) {
               vote_average: ep.vote_average,
             },
             updated_at: new Date().toISOString(),
-          }, { onConflict: "show_id,season,episode" });
+          }, { onConflict: "source,show_id,season,episode" });
 
           // Link season pack magnet to episode
           if (packRelease && packRelease.magnet_link) {
@@ -427,7 +430,7 @@ async function main() {
     console.log(`\n📂 [Category ${catIdx + 1}/${MOVIE_CATEGORIES.length}] ${cat.name} (Lang: ${cat.lang})`);
 
     const startPage = catIdx === cp.movieCategoryIndex ? cp.moviePage : 1;
-    const maxPages = 200; // 200 pages * 20 = 4,000 movies per category
+    const maxPages = cat.maxPages || 350;
 
     for (let page = startPage; page <= maxPages; page++) {
       const pageT0 = Date.now();
@@ -475,7 +478,7 @@ async function main() {
     console.log(`\n📂 [Series Category ${catIdx + 1}/${TV_CATEGORIES.length}] ${cat.name} (Lang: ${cat.lang})`);
 
     const startPage = catIdx === cp.seriesCategoryIndex ? cp.seriesPage : 1;
-    const maxPages = 100; // 100 pages * 20 = 2,000 series per category
+    const maxPages = cat.maxPages || 150;
 
     for (let page = startPage; page <= maxPages; page++) {
       const pageT0 = Date.now();
