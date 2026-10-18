@@ -445,7 +445,8 @@ async function ingestMoviesLoop(supabase, cp) {
               cp.totalMoviesAdded++;
               cp.totalSourcesAdded += out.savedTiers?.length || 0;
               const qStr = out.savedTiers?.length ? out.savedTiers.join(", ") : "Cloud Stream";
-              console.log(`  🎬 [Movie #${cp.totalMoviesAdded}] "${out.title}" (${out.year || "N/A"}) [${out.lang}] -> [${qStr}]`);
+              const audioLabel = out.lang === "hi" ? "Hindi" : "Dual Audio [Hindi+Eng]";
+              console.log(`  🎬 [Movie #${cp.totalMoviesAdded}] "${out.title}" (${out.year || "N/A"}) [${audioLabel}] -> [${qStr}]`);
             }
           }
           await sleep(100);
