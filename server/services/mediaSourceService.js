@@ -887,7 +887,7 @@ async function saveTorrentRelease(params, release) {
     title: release.title || params.title,
     sizeBytes: hinted.size_bytes,
     size: hinted.size_human,
-    quality: release.quality,
+    quality: release.quality || params?.quality,
     mediaType: params.mediaType,
     metadata: release.title || params.title,
   });

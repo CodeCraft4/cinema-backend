@@ -27,7 +27,13 @@ const { cleanSearchTitle, discoverCascadingTorrents, rankValidReleases, detectQu
 
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "40b06951f1c6497bbe2bc6d9e5ad6b47";
 const VPS_BASE_URL = process.env.BASE_URL || "http://168.144.249.68:4555";
-const CHECKPOINT_FILE = path.join(__dirname, ".master-24h-checkpoint.json");
+const targetMode = process.argv.find((a) => a.startsWith("--mode="))?.split("=")[1] || "all";
+const CHECKPOINT_FILE = targetMode === "movies"
+  ? path.join(__dirname, ".master-movies-checkpoint.json")
+  : targetMode === "series"
+  ? path.join(__dirname, ".master-series-checkpoint.json")
+  : path.join(__dirname, ".master-24h-checkpoint.json");
+
 
 const CONCURRENCY = 3;
 
@@ -224,7 +230,7 @@ async function resolveMovieQualities(movie) {
   for (const [tier, chosen] of Object.entries(tiers)) {
     if (!chosen || !chosen.magnet_link) continue;
     try {
-      await saveTorrentRelease(
+      const saved = await saveTorrentRelease(
         {
           mediaId,
           imdbId,
@@ -240,9 +246,9 @@ async function resolveMovieQualities(movie) {
           baseUrl: VPS_BASE_URL,
           allowEnglish: isNativeHindi,
         },
-        chosen
+        { ...chosen, quality: tier }
       );
-      savedTiers.push(tier);
+      if (saved) savedTiers.push(tier);
     } catch (_) {}
   }
 
