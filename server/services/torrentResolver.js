@@ -210,7 +210,11 @@ function acceptTorrentRelease({ title, sizeBytes, size, quality, mediaType, meta
 
   const bytes = parseByteSize(sizeBytes, size, extra);
   if (!bytes) return { ok: false };
-  if (seeders != null && Number(seeders) < MIN_SEEDERS) return { ok: false };
+  // Require at least MIN_SEEDERS shown connected seeders to treat a swarm as
+  // healthy. A torrent that reports 0 seeders, or omits the seeder count
+  // entirely, can never prove it has live uploads, so presenting it would
+  // 503 with TORRENT_NO_PEERS for every client that tries it.
+  if (seeders == null || Number(seeders) < MIN_SEEDERS) return { ok: false };
 
   const detected = detectQuality(quality) || detectQuality(name) || detectQuality(extra) || "1080p";
   const kind = releaseKind(`${name} ${extra}`, mediaType);
@@ -430,6 +434,12 @@ function rankValidReleases(items, mediaType, expectedTitle = "", targetSeason = 
         const foundEpisode = Number(seMatch[2]);
         if (sNum != null && foundSeason !== sNum) continue; // Different season
         if (epNum != null && foundEpisode !== epNum) continue; // Different episode
+      } else if (epNum != null) {
+        // Episode-level requests must come from a torrent whose filename marks
+        // the exact episode. A bare season torrent has no single file for the
+        // requested episode and would 404 with TORRENT_EPISODE_NOT_FOUND at
+        // stream time, so reject it now instead of presenting a bad source.
+        continue;
       } else {
         const sOnly = title.match(/\b(?:s|season)\s*0*(\d+)\b/i);
         if (sOnly && sNum != null && Number(sOnly[1]) !== sNum) {
