@@ -49,6 +49,7 @@ const MIME_TYPES = {
   ".m4v": "video/x-m4v",
   ".ts": "video/mp2t",
   ".flv": "video/x-flv",
+  ".wmv": "video/x-ms-wmv",
 };
 
 // Use project virtual disk instead of os.tmpdir() (/tmp is mounted as tmpfs in RAM on Railway/Docker, which caused the 512MB OOM crash!)
@@ -94,14 +95,10 @@ function normalizeMagnet(input) {
 
 function getMimeType(filename) {
   const ext = path.extname(filename || "").toLowerCase();
-  // Force video/mp4 MIME type for maximum iOS AVPlayer and ExoPlayer streaming compatibility
-  if (ext === ".mkv" || ext === ".mp4" || ext === ".m4v" || ext === ".mov") {
-    return "video/mp4";
-  }
-  return MIME_TYPES[ext] || "video/mp4";
+  return MIME_TYPES[ext] || "application/octet-stream";
 }
 
-const ALLOWED_VIDEO_REGEX = /\.(mp4|mkv|webm|avi|m4v|mov)$/i;
+const ALLOWED_VIDEO_REGEX = /\.(mp4|mkv|webm|avi|m4v|mov|flv|ts|wmv)$/i;
 const MALWARE_EXT_REGEX = /\.(exe|bat|cmd|scr|msi|zip|rar|7z|iso|lnk|txt)$/i;
 
 const isCleanVideo = (fileName) => {
@@ -120,45 +117,58 @@ function pickMainVideoFile(files = []) {
   return [...videoFiles].sort((a, b) => (b.length || 0) - (a.length || 0))[0] || null;
 }
 
-/**
- * Finds the exact video file matching a requested episode number (e.g. ep=2)
- * Supports S01E02, 1x02, EP02, Episode 02, Part 2, and natural alphanumeric sort.
- */
-function findEpisodeFile(files = [], ep, season = null) {
-  const cleanFiles = (files || []).filter((f) => isCleanVideo(f.name || f.path));
-  if (!cleanFiles.length) return null;
-  if (cleanFiles.length === 1) return cleanFiles[0];
-
-  const epNum = parseInt(ep, 10);
-  if (isNaN(epNum) || epNum <= 0) return null;
-  const epPadded = String(epNum).padStart(2, "0");
-  const sNum = season ? parseInt(season, 10) : null;
-  const sPadded = sNum ? String(sNum).padStart(2, "0") : "\\d+";
-
-  // 1. Season + Episode pattern: S01E03, S1E3, 1x03, 01x03, S01.E03
-  const sEpRegex = new RegExp(`(?:S${sPadded}[._ -]*E0?${epNum}\\b|${sNum || "\\d+"}x0?${epNum}\\b|S${sPadded}E${epPadded}\\b)`, "i");
-  let matched = cleanFiles.find((f) => sEpRegex.test(f.name) || sEpRegex.test(f.path));
-  if (matched) return matched;
-
-  // 2. Episode prefix: E03, EP03, Ep 03, Ep.03, Episode 03, Part 03
-  const epPrefixRegex = new RegExp(`(?:[._ -]E0?${epNum}[._ -]|[._ -]EP0?${epNum}[._ -]|(?:Episode|Ep|Part)[._ -]*0?${epNum}\\b)`, "i");
-  matched = cleanFiles.find((f) => epPrefixRegex.test(f.name) || epPrefixRegex.test(f.path));
-  if (matched) return matched;
-
-  // 3. Standalone episode number in delimiters: " - 03 - ", " [03] ", " (03) ", " 03.mkv "
-  const standaloneEpRegex = new RegExp(`(?:[._ -[\(]0?${epNum}[._ -\\]\)])`, "i");
-  matched = cleanFiles.find((f) => standaloneEpRegex.test(f.name) || standaloneEpRegex.test(f.path));
-  if (matched) return matched;
-
-  // 4. Fallback: Natural alphanumeric sort of clean video files
-  const sorted = [...cleanFiles].sort((a, b) =>
-    (a.name || a.path || "").localeCompare(b.name || b.path || "", undefined, { numeric: true, sensitivity: "base" })
-  );
-  if (sorted[epNum - 1]) {
-    return sorted[epNum - 1];
+function parseEpisodeMarker(file) {
+  const filename = String(file?.name || file?.path || "");
+  const seasonEpisode = filename.match(/(?:^|[^a-z0-9])s(\d{1,2})[ ._-]*e(\d{1,3})(?=$|[^0-9])/i);
+  if (seasonEpisode) {
+    return { season: Number(seasonEpisode[1]), episode: Number(seasonEpisode[2]) };
   }
 
-  return cleanFiles[0];
+  const seasonWordEpisode = filename.match(/(?:^|[^a-z0-9])season[ ._-]*(\d{1,2})[ ._-]*(?:episode|ep|e)[ ._-]*(\d{1,3})(?=$|[^0-9])/i);
+  if (seasonWordEpisode) {
+    return { season: Number(seasonWordEpisode[1]), episode: Number(seasonWordEpisode[2]) };
+  }
+
+  const seasonXEpisode = filename.match(/(?:^|[^0-9])(\d{1,2})x(\d{1,3})(?=$|[^0-9])/i);
+  if (seasonXEpisode) {
+    return { season: Number(seasonXEpisode[1]), episode: Number(seasonXEpisode[2]) };
+  }
+
+  const episodeOnly = filename.match(/(?:^|[^a-z0-9])(?:episode|ep|e|part)[ ._-]*(\d{1,3})(?=$|[^0-9])/i);
+  if (episodeOnly) return { season: null, episode: Number(episodeOnly[1]) };
+  return null;
+}
+
+/** Select only a file whose name identifies the requested episode. */
+function findEpisodeFile(files = [], ep, season = null) {
+  const epNum = Number(ep);
+  const seasonNum = season == null || season === "" ? null : Number(season);
+  if (!Number.isInteger(epNum) || epNum <= 0) return null;
+  if (seasonNum != null && (!Number.isInteger(seasonNum) || seasonNum <= 0)) return null;
+
+  const matches = (files || []).filter((file) => {
+    if (!isCleanVideo(file.name || file.path)) return false;
+    const marker = parseEpisodeMarker(file);
+    if (!marker || marker.episode !== epNum) return false;
+    return seasonNum == null || marker.season == null || marker.season === seasonNum;
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function getSwarmStats(record) {
+  const wires = Array.isArray(record?.engine?.swarm?.wires) ? record.engine.swarm.wires : [];
+  return {
+    peerCount: wires.length,
+    seederCount: wires.filter((wire) => Boolean(wire?.isSeeder)).length,
+  };
+}
+
+function getContentDisposition(filename, isDownload) {
+  const basename = path.basename(String(filename || "video").replace(/\\/g, "/"));
+  const asciiFilename = basename.replace(/[\r\n"\\]/g, "_").replace(/[^\x20-\x7E]/g, "_");
+  const utf8Filename = encodeURIComponent(basename).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  const disposition = isDownload ? "attachment" : "inline";
+  return `${disposition}; filename="${asciiFilename}"; filename*=UTF-8''${utf8Filename}`;
 }
 
 /**
@@ -300,9 +310,10 @@ async function getOrStartEngine(magnetOrHash, { timeoutMs = 35000 } = {}) {
       const { data } = await supabase
         .from("media_sources")
         .select("magnet_link")
+        .eq("status", "ready")
         .or(`stream_url.ilike.%${infoHash}%,download_url.ilike.%${infoHash}%,magnet_link.ilike.%${infoHash}%`)
         .limit(1);
-      if (data && data[0]?.magnet_link) {
+      if (data && data[0]?.magnet_link && extractInfoHash(data[0].magnet_link) === infoHash) {
         targetMagnet = data[0].magnet_link;
       }
     } catch (_) {}
@@ -352,17 +363,22 @@ async function getOrStartEngine(magnetOrHash, { timeoutMs = 35000 } = {}) {
   record.readyPromise = new Promise((resolve, reject) => {
     let settled = false;
 
-    // Buffers parse in <100ms; magnets get up to 15s for DHT peer discovery before cloud failover
+    // Wait for torrent metadata only; all media bytes are served by this API.
     const effectiveTimeout = torrentSource instanceof Buffer ? 5000 : 15000;
     const timeoutTimer = setTimeout(() => {
       if (settled) return;
       settled = true;
       record.status = "error";
       activeEngines.delete(infoHash);
+      const error = new Error(`Timeout waiting for torrent metadata (${Math.round(effectiveTimeout / 1000)}s). Swarm may have few or slow seeders.`);
+      error.code = "TORRENT_METADATA_TIMEOUT";
+      error.infoHash = infoHash;
+      error.selectedFilename = record.mainFile?.name || null;
+      error.swarm = getSwarmStats(record);
       try {
         engine.destroy();
       } catch {}
-      reject(new Error(`Timeout waiting for torrent metadata (${Math.round(effectiveTimeout / 1000)}s). Swarm may have few or slow seeders.`));
+      reject(error);
     }, effectiveTimeout);
 
     engine.on("ready", () => {
@@ -376,37 +392,17 @@ async function getOrStartEngine(magnetOrHash, { timeoutMs = 35000 } = {}) {
       if (!mainFile) {
         record.status = "error";
         activeEngines.delete(infoHash);
+        const error = new Error("No valid media files found in torrent.");
+        error.code = "TORRENT_HAS_NO_PLAYABLE_VIDEO";
+        error.infoHash = infoHash;
+        error.selectedFilename = null;
+        error.swarm = getSwarmStats(record);
         try {
           engine.destroy();
         } catch {}
-        reject(new Error("No valid media files found in torrent."));
+        reject(error);
         return;
       }
-
-      // Deselect other files (samples, nfo, images) so bandwidth is dedicated to main video
-      for (const f of files) {
-        if (f !== mainFile && typeof f.deselect === "function") {
-          try {
-            f.deselect();
-          } catch {}
-        }
-      }
-
-      // Select main video and prioritize the initial pieces (head buffer for instant playback)
-      if (typeof mainFile.select === "function") {
-        try {
-          mainFile.select();
-        } catch {}
-      }
-
-      // Priority download for video header (first 5MB - 10MB) to start video instantly
-      try {
-        const pieceLength = engine.torrent?.pieceLength || 1048576;
-        const initialPieces = Math.min(10, Math.ceil(mainFile.length / pieceLength));
-        for (let i = 0; i < initialPieces; i++) {
-          engine.critical?.(i);
-        }
-      } catch {}
 
       record.status = "ready";
       record.mainFile = mainFile;
@@ -426,6 +422,9 @@ async function getOrStartEngine(magnetOrHash, { timeoutMs = 35000 } = {}) {
         clearTimeout(timeoutTimer);
         record.status = "error";
         activeEngines.delete(infoHash);
+        err.infoHash = infoHash;
+        err.selectedFilename = record.mainFile?.name || null;
+        err.swarm = getSwarmStats(record);
         reject(err);
       }
     });
@@ -436,11 +435,10 @@ async function getOrStartEngine(magnetOrHash, { timeoutMs = 35000 } = {}) {
 }
 
 /**
- * Handles HTTP Range streaming of the main torrent video file.
- * Compatible with standard HTTP 206 Partial Content and 200 OK.
+ * Streams the selected torrent file through this API. Torrent failures always
+ * produce a JSON error; this route never falls back to an external web player.
  */
 async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = false } = {}) {
-  // 1. Disable Node.js request and socket timeouts for large 1GB-5GB+ files
   if (req.setTimeout) req.setTimeout(0);
   if (res.setTimeout) res.setTimeout(0);
   if (req.socket?.setTimeout) req.socket.setTimeout(0);
@@ -448,219 +446,313 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
   req.socket?.setKeepAlive(true, 10000);
 
   const target = magnet || infoHash;
-  if (!target) {
-    return res.status(400).json({ error: "Missing magnet or hash parameter" });
+  const requestedHash = extractInfoHash(target);
+  if (!requestedHash) {
+    return res.status(400).json({
+      ok: false,
+      code: "INVALID_TORRENT_IDENTIFIER",
+      error: "Provide a valid torrent info hash or magnet link.",
+      infoHash: null,
+      selectedFilename: null,
+      peerCount: 0,
+      seederCount: 0,
+    });
   }
+  if (req.aborted || res.destroyed) return;
 
   let record;
   try {
     record = await getOrStartEngine(target);
   } catch (err) {
-    console.warn(`[TorrentStream] engine failed for ${extractInfoHash(target) || "unknown"}:`, err.message);
-
-    return res.status(504).json({
+    const stats = err.swarm || { peerCount: 0, seederCount: 0 };
+    const statusCode = err.code === "TORRENT_HAS_NO_PLAYABLE_VIDEO"
+      ? 422
+      : stats.peerCount === 0 ? 503 : 504;
+    console.warn(`[TorrentStream] engine failed for ${requestedHash}:`, err.message);
+    return res.status(statusCode).json({
       ok: false,
-      code: "TORRENT_ENGINE_UNAVAILABLE",
-      error: "Could not initialize torrent stream.",
+      code: err.code || "TORRENT_ENGINE_UNAVAILABLE",
+      error: "Torrent metadata or peers are unavailable; no external player redirect was attempted.",
       message: err.message,
-      infoHash: extractInfoHash(target),
+      infoHash: requestedHash,
+      selectedFilename: err.selectedFilename || null,
+      peerCount: stats.peerCount,
+      seederCount: stats.seederCount,
+      swarm: stats,
       retryable: true,
     });
   }
 
-  let targetFile = record.mainFile;
-  const ep = req.query.episode || req.query.ep;
-  const season = req.query.season || req.query.s;
-  const fileIndex = req.query.fileIndex != null ? Number(req.query.fileIndex) : null;
-
-  if (fileIndex != null && Number.isInteger(fileIndex) && record.engine?.files?.[fileIndex]) {
-    const candidate = record.engine.files[fileIndex];
-    if (isCleanVideo(candidate.name || candidate.path)) {
-      targetFile = candidate;
-    } else {
-      scheduleIdleCleanup(record.infoHash);
-      return res.status(400).json({
-        error: "Invalid torrent: No playable video stream found. (Executable/Spam blocked)",
-        infoHash: record.infoHash,
-      });
-    }
-  } else if (ep != null) {
-    const matched = findEpisodeFile(record.engine?.files || [], ep, season);
-    if (matched) targetFile = matched;
+  if (req.aborted || res.destroyed) {
+    scheduleIdleCleanup(record.infoHash);
+    return;
   }
 
-  // Strictly block .exe, malware, or empty non-video torrents
+  const files = record.engine?.files || [];
+  const requestedEpisode = req.query.episode ?? req.query.ep;
+  const requestedSeason = req.query.season ?? req.query.s;
+  const fileIndexProvided = req.query.fileIndex != null;
+  let targetFile = null;
+
+  if (requestedEpisode != null) {
+    const episodeNumber = Number(requestedEpisode);
+    const seasonNumber = requestedSeason == null || requestedSeason === "" ? null : Number(requestedSeason);
+    if (!Number.isInteger(episodeNumber) || episodeNumber <= 0 ||
+        (seasonNumber != null && (!Number.isInteger(seasonNumber) || seasonNumber <= 0))) {
+      scheduleIdleCleanup(record.infoHash);
+      return res.status(400).json({
+        ok: false,
+        code: "INVALID_EPISODE",
+        error: "Episode and season must be positive integers.",
+        infoHash: record.infoHash,
+        requestedEpisode,
+        requestedSeason: requestedSeason ?? null,
+      });
+    }
+
+    targetFile = findEpisodeFile(files, episodeNumber, seasonNumber);
+    if (!targetFile) {
+      const stats = getSwarmStats(record);
+      const availableFiles = files
+        .filter((file) => isCleanVideo(file.name || file.path))
+        .map((file) => file.name || file.path);
+      scheduleIdleCleanup(record.infoHash);
+      console.warn(`[TorrentStream] No exact file for ${record.infoHash} episode ${episodeNumber}${seasonNumber ? ` season ${seasonNumber}` : ""}; candidates=${availableFiles.join(" | ") || "none"}`);
+      return res.status(404).json({
+        ok: false,
+        code: "TORRENT_EPISODE_NOT_FOUND",
+        error: "This torrent does not contain one unambiguous file matching the requested episode. No other episode was selected.",
+        infoHash: record.infoHash,
+        requestedEpisode: episodeNumber,
+        requestedSeason: seasonNumber,
+        selectedFilename: null,
+        availableVideoFiles: availableFiles,
+        peerCount: stats.peerCount,
+        seederCount: stats.seederCount,
+      });
+    }
+  } else if (fileIndexProvided) {
+    const fileIndex = Number(req.query.fileIndex);
+    const candidate = Number.isInteger(fileIndex) && fileIndex >= 0 ? files[fileIndex] : null;
+    if (!candidate || !isCleanVideo(candidate.name || candidate.path)) {
+      scheduleIdleCleanup(record.infoHash);
+      return res.status(400).json({
+        ok: false,
+        code: "INVALID_TORRENT_FILE_INDEX",
+        error: "fileIndex does not identify a playable video file.",
+        infoHash: record.infoHash,
+        selectedFilename: null,
+      });
+    }
+    targetFile = candidate;
+  } else {
+    targetFile = record.mainFile;
+  }
+
   if (!targetFile || !isCleanVideo(targetFile.name || targetFile.path) || typeof targetFile.createReadStream !== "function") {
+    const stats = getSwarmStats(record);
     scheduleIdleCleanup(record.infoHash);
-    return res.status(400).json({
-      error: "Invalid torrent: No playable video stream found. (Executable/Spam blocked)",
+    return res.status(422).json({
+      ok: false,
+      code: "TORRENT_HAS_NO_PLAYABLE_VIDEO",
+      error: "Torrent metadata contains no playable video file.",
       infoHash: record.infoHash,
+      selectedFilename: targetFile?.name || null,
+      peerCount: stats.peerCount,
+      seederCount: stats.seederCount,
     });
   }
 
-  if (typeof targetFile.select === "function") {
-    try {
-      targetFile.select();
-    } catch {}
+  const totalSize = Number(targetFile.length);
+  const fileName = targetFile.name || "video";
+  const mimeType = getMimeType(fileName);
+  if (!Number.isSafeInteger(totalSize) || totalSize <= 0) {
+    scheduleIdleCleanup(record.infoHash);
+    return res.status(422).json({
+      ok: false,
+      code: "TORRENT_FILE_SIZE_UNKNOWN",
+      error: "Torrent video file has an invalid or unknown size.",
+      infoHash: record.infoHash,
+      selectedFilename: fileName,
+      peerCount: getSwarmStats(record).peerCount,
+      seederCount: getSwarmStats(record).seederCount,
+    });
   }
 
-  const totalSize = Number(targetFile.length) || 0;
-  const fileName = targetFile.name || "video.mp4";
-  const mimeType = getMimeType(fileName);
+  let start = 0;
+  let end = totalSize - 1;
+  let isRange = false;
+  const rangeHeader = req.headers.range;
+  if (rangeHeader) {
+    const match = /^bytes=(\d*)-(\d*)$/i.exec(String(rangeHeader).trim());
+    if (!match || (!match[1] && !match[2])) {
+      res.set({ "Content-Range": `bytes */${totalSize}`, "Content-Length": "0" });
+      scheduleIdleCleanup(record.infoHash);
+      return res.status(416).end();
+    }
 
-  if (!totalSize) {
+    try {
+      if (!match[1]) {
+        const suffixLength = BigInt(match[2]);
+        if (suffixLength <= 0n) throw new Error("Invalid suffix range");
+        start = suffixLength >= BigInt(totalSize) ? 0 : totalSize - Number(suffixLength);
+      } else {
+        const startBig = BigInt(match[1]);
+        if (startBig >= BigInt(totalSize)) throw new Error("Range starts beyond file size");
+        start = Number(startBig);
+      }
+      if (match[1] && match[2]) {
+        const endBig = BigInt(match[2]);
+        end = endBig >= BigInt(totalSize) ? totalSize - 1 : Number(endBig);
+      }
+      if (start > end) throw new Error("Range end precedes start");
+      isRange = true;
+    } catch {
+      res.set({ "Content-Range": `bytes */${totalSize}`, "Content-Length": "0" });
+      scheduleIdleCleanup(record.infoHash);
+      return res.status(416).end();
+    }
+  }
+
+  const chunkSize = end - start + 1;
+  const isDown = isDownload || req.query.download === "1" || req.path.includes("/download/");
+  const headers = {
+    "Accept-Ranges": "bytes",
+    "Content-Type": mimeType,
+    "Content-Disposition": getContentDisposition(fileName, isDown),
+    "Cache-Control": "no-cache",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+    "Access-Control-Allow-Headers": "Range, Accept-Ranges, Content-Range, Content-Type, Content-Length",
+    "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges, Content-Disposition",
+  };
+
+  if (req.method === "HEAD") {
+    res.set({ ...headers, "Content-Length": totalSize });
     scheduleIdleCleanup(record.infoHash);
-    return res.status(404).json({
-      error: "Torrent video file has unknown size",
-      fileName,
+    return res.status(200).end();
+  }
+
+  let readStream;
+  try {
+    readStream = targetFile.createReadStream({ start, end });
+  } catch (err) {
+    scheduleIdleCleanup(record.infoHash);
+    return res.status(503).json({
+      ok: false,
+      code: "TORRENT_READ_STREAM_UNAVAILABLE",
+      error: "Could not open the selected torrent file for reading.",
+      message: err.message,
       infoHash: record.infoHash,
+      selectedFilename: fileName,
+      peerCount: getSwarmStats(record).peerCount,
+      seederCount: getSwarmStats(record).seederCount,
     });
   }
 
   record.lastAccessedAt = Date.now();
   record.activeStreams += 1;
+  let released = false;
+  let streamStarted = false;
+  let firstDataTimer = null;
 
-  const isDown = isDownload || req.query.download === "1" || req.path.includes("/download/");
-  const cleanFilename = (fileName || "movie.mp4").replace(/["\r\n]/g, "");
-  const disposition = isDown
-    ? `attachment; filename="${cleanFilename}"`
-    : `inline; filename="${cleanFilename}"`;
-
-  // Base CORS, Range & Cache response headers
-  res.set({
-    "Accept-Ranges": "bytes",
-    "Content-Type": mimeType,
-    "Content-Disposition": disposition,
-    "Cache-Control": "no-cache",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-    "Access-Control-Allow-Headers": "Range, Accept-Ranges, Content-Range, Content-Type, Content-Length",
-    "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
-  });
-
-  // Handle HEAD requests
-  if (req.method === "HEAD") {
-    res.set("Content-Length", totalSize);
+  const release = (destroyReadStream = false) => {
+    if (released) return;
+    released = true;
+    if (firstDataTimer) clearTimeout(firstDataTimer);
+    req.removeListener("aborted", onClientDisconnect);
+    res.removeListener("close", onResponseClose);
+    res.removeListener("finish", onResponseFinish);
     record.activeStreams = Math.max(0, record.activeStreams - 1);
     scheduleIdleCleanup(record.infoHash);
-    return res.status(200).end();
-  }
-
-  const rangeHeader = req.headers.range;
-  let start = 0;
-  let end = totalSize - 1;
-  let isRange = false;
-
-  if (rangeHeader) {
-    const matches = rangeHeader.match(/bytes=(\d*)-(\d*)/);
-    if (matches) {
-      isRange = true;
-      const rStart = matches[1];
-      const rEnd = matches[2];
-
-      if (rStart === "" && rEnd !== "") {
-        // Suffix range: -N means last N bytes
-        const suffix = parseInt(rEnd, 10);
-        start = Math.max(0, totalSize - suffix);
-        end = totalSize - 1;
-      } else {
-        start = rStart !== "" ? parseInt(rStart, 10) : 0;
-        end = rEnd !== "" ? parseInt(rEnd, 10) : totalSize - 1;
-      }
-    }
-  }
-
-  // Validate range
-  if (isNaN(start) || isNaN(end) || start > end || start >= totalSize || end >= totalSize || start < 0) {
-    res.set({
-      "Content-Range": `bytes */${totalSize}`,
-      "Content-Length": 0,
-    });
-    record.activeStreams = Math.max(0, record.activeStreams - 1);
-    scheduleIdleCleanup(record.infoHash);
-    return res.status(416).end();
-  }
-
-  const chunkSize = end - start + 1;
-
-  const readStream = targetFile.createReadStream({ start, end });
-
-  let closed = false;
-  let receivedAnyData = false;
-  let chunkTimer = null;
-
-  const onDone = () => {
-    if (closed) return;
-    closed = true;
-    if (chunkTimer) clearTimeout(chunkTimer);
-    record.activeStreams = Math.max(0, record.activeStreams - 1);
-    scheduleIdleCleanup(record.infoHash);
-    if (readStream && typeof readStream.destroy === "function") {
-      try {
-        readStream.destroy();
-      } catch {}
-    }
+    if (destroyReadStream && readStream && !readStream.destroyed) readStream.destroy();
   };
 
-  // Allow peer discovery time to deliver the first piece. Never redirect to an embed page.
-  chunkTimer = setTimeout(() => {
-    if (receivedAnyData || closed) return;
-    const wires = Array.isArray(record.engine?.swarm?.wires) ? record.engine.swarm.wires : [];
-    const seederCount = wires.filter((wire) => Boolean(wire?.isSeeder)).length;
-    console.warn(
-      `[TorrentStream] No first piece after ${FIRST_DATA_TIMEOUT_MS}ms for ${record.infoHash}; peers=${wires.length}, seeders=${seederCount}.`
-    );
-    onDone();
-    if (!res.headersSent) {
-      res.status(504).json({
+  const onClientDisconnect = () => release(true);
+  const onResponseClose = () => {
+    if (!res.writableFinished) release(true);
+  };
+  const onResponseFinish = () => release(!readStream.readableEnded);
+
+  const noPieceResponse = (statusCode, code, errorMessage) => {
+    if (released) return;
+    const stats = getSwarmStats(record);
+    console.warn(`[TorrentStream] ${code} for ${record.infoHash}; file=${fileName}; peers=${stats.peerCount}; seeders=${stats.seederCount}`);
+    release(true);
+    if (!res.headersSent && !res.destroyed) {
+      res.status(statusCode).json({
         ok: false,
-        code: "TORRENT_FIRST_PIECE_TIMEOUT",
-        error: "No torrent peer delivered the first video piece before timeout.",
+        code,
+        error: errorMessage,
         infoHash: record.infoHash,
-        fileName,
-        swarm: { peerCount: wires.length, seederCount },
+        selectedFilename: fileName,
+        peerCount: stats.peerCount,
+        seederCount: stats.seederCount,
+        swarm: stats,
         retryable: true,
       });
     }
-  }, FIRST_DATA_TIMEOUT_MS);
+  };
 
-  // Request close can fire when a GET is complete, before the response body is sent.
-  // Release the torrent stream from the response lifecycle instead.
-  res.on("close", onDone);
-  res.on("finish", onDone);
+  const startResponse = () => {
+    if (released || streamStarted || readStream.readableLength <= 0) return;
+    streamStarted = true;
+    if (firstDataTimer) clearTimeout(firstDataTimer);
+    res.status(isRange ? 206 : 200).set({
+      ...headers,
+      "Content-Length": chunkSize,
+      ...(isRange ? { "Content-Range": `bytes ${start}-${end}/${totalSize}` } : {}),
+    });
+    // pipe() propagates response backpressure to the torrent file stream.
+    readStream.pipe(res);
+  };
 
+  req.once("aborted", onClientDisconnect);
+  res.once("close", onResponseClose);
+  res.once("finish", onResponseFinish);
+  readStream.on("readable", startResponse);
+  readStream.once("end", () => {
+    if (!streamStarted && !released) {
+      noPieceResponse(504, "TORRENT_STREAM_EMPTY", "Torrent file ended before any media bytes were available.");
+    }
+  });
   readStream.on("error", (err) => {
-    console.warn(`[TorrentStream] Stream error for ${fileName}:`, err.message);
-    onDone();
+    if (released) return;
+    console.warn(`[TorrentStream] Read error for ${fileName}:`, err.message);
     if (!res.headersSent) {
-      res.status(500).end();
-    }
-  });
-
-  readStream.on("data", (chunk) => {
-    if (!receivedAnyData) {
-      receivedAnyData = true;
-      if (chunkTimer) clearTimeout(chunkTimer);
-      if (!res.headersSent) {
-        if (isRange) {
-          res.status(206);
-          res.set({
-            "Content-Range": `bytes ${start}-${end}/${totalSize}`,
-            "Content-Length": chunkSize,
-          });
-        } else {
-          res.status(200);
-          res.set("Content-Length", totalSize);
-        }
+      const stats = getSwarmStats(record);
+      release(true);
+      if (!res.destroyed) {
+        res.status(503).json({
+          ok: false,
+          code: "TORRENT_READ_FAILED",
+          error: "Torrent peers could not provide the selected media bytes.",
+          message: err.message,
+          infoHash: record.infoHash,
+          selectedFilename: fileName,
+          peerCount: stats.peerCount,
+          seederCount: stats.seederCount,
+          swarm: stats,
+          retryable: true,
+        });
       }
+      return;
     }
-    res.write(chunk);
+    release(true);
+    res.destroy(err);
   });
 
-  readStream.on("end", () => {
-    if (chunkTimer) clearTimeout(chunkTimer);
-    res.end();
-  });
+  firstDataTimer = setTimeout(() => {
+    const stats = getSwarmStats(record);
+    const noPeers = stats.peerCount === 0;
+    noPieceResponse(
+      noPeers ? 503 : 504,
+      noPeers ? "TORRENT_NO_PEERS" : "TORRENT_FIRST_PIECE_TIMEOUT",
+      noPeers
+        ? "No torrent peers are connected to provide the selected video file."
+        : "Connected torrent peers did not provide the first requested video piece before timeout."
+    );
+  }, FIRST_DATA_TIMEOUT_MS);
 }
 
 function getLanIp() {

@@ -28,6 +28,18 @@ const handleTorrentStream = asyncHandler(async (req, res) => {
   const infoHash = extractInfoHash(target);
   const magnet = normalizeMagnet(magnetQuery || target);
 
+  if (!infoHash || !magnet || extractInfoHash(magnet) !== infoHash) {
+    return res.status(400).json({
+      ok: false,
+      code: "INVALID_TORRENT_IDENTIFIER",
+      error: "The torrent hash or magnet link is invalid or inconsistent.",
+      infoHash: infoHash || null,
+      selectedFilename: null,
+      peerCount: 0,
+      seederCount: 0,
+    });
+  }
+
   const isDownload = req.query.download === "1" || req.path.includes("/download/");
   // Serve torrent media only from this API. Never send native clients to embed players.
   const enableP2P = process.env.ENABLE_P2P_TORRENT !== "false";
