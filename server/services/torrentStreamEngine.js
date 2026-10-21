@@ -624,7 +624,8 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
     }
   }, FIRST_DATA_TIMEOUT_MS);
 
-  req.on("close", onDone);
+  // Request close can fire when a GET is complete, before the response body is sent.
+  // Release the torrent stream from the response lifecycle instead.
   res.on("close", onDone);
   res.on("finish", onDone);
 
