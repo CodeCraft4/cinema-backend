@@ -60,6 +60,10 @@ try {
 // In-memory active torrent engines: infoHash -> engineRecord
 const activeEngines = new Map();
 const IDLE_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes idle teardown
+const configuredFirstDataTimeout = Number.parseInt(process.env.TORRENT_FIRST_DATA_TIMEOUT_MS || "", 10);
+const FIRST_DATA_TIMEOUT_MS = Number.isFinite(configuredFirstDataTimeout)
+  ? Math.max(15000, Math.min(60000, configuredFirstDataTimeout))
+  : 25000;
 
 function extractInfoHash(input) {
   if (!input) return null;
@@ -454,39 +458,13 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
   } catch (err) {
     console.warn(`[TorrentStream] engine failed for ${extractInfoHash(target) || "unknown"}:`, err.message);
 
-    // Automatic 504 Recovery: Look up title/tmdbId from Supabase and redirect to high-speed embed stream!
-    try {
-      const hash = extractInfoHash(target);
-      const { getSupabaseClient } = require("./supabaseClient");
-      const supabase = getSupabaseClient();
-      const { data } = await supabase
-        .from("media_sources")
-        .select("media_id, media_title, payload")
-        .or(`stream_url.ilike.%${hash}%,download_url.ilike.%${hash}%,magnet_link.ilike.%${hash}%`)
-        .limit(1);
-
-      const item = data?.[0];
-      const tmdbId = req.query.tmdbId || req.query.id || item?.payload?.tmdb_id || item?.media_id;
-      const season = req.query.season || req.query.s || item?.payload?.season;
-      const episode = req.query.episode || req.query.ep || item?.payload?.episode;
-
-      if (tmdbId) {
-        const cleanId = String(tmdbId).replace(/^[^\d]+/, "");
-        const fallbackUrl = season && episode
-          ? `https://vidlink.pro/tv/${cleanId}/${season}/${episode}`
-          : `https://vidlink.pro/movie/${cleanId}`;
-        console.log(`[TorrentStream] 504 recovery: redirecting to embed stream -> ${fallbackUrl}`);
-        return res.redirect(302, fallbackUrl);
-      }
-    } catch (fallbackErr) {
-      console.warn("[TorrentStream] Embed recovery error:", fallbackErr.message);
-    }
-
     return res.status(504).json({
       ok: false,
-      error: "Could not initialize torrent stream",
+      code: "TORRENT_ENGINE_UNAVAILABLE",
+      error: "Could not initialize torrent stream.",
       message: err.message,
       infoHash: extractInfoHash(target),
+      retryable: true,
     });
   }
 
@@ -624,42 +602,27 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
     }
   };
 
-  // Watchdog: If swarm doesn't emit any data in 8 seconds, fallback cleanly to Cloud Stream
-  chunkTimer = setTimeout(async () => {
+  // Allow peer discovery time to deliver the first piece. Never redirect to an embed page.
+  chunkTimer = setTimeout(() => {
     if (receivedAnyData || closed) return;
-    console.warn(`[TorrentStream] Swarm timeout (8s without data) for ${record.infoHash}. Auto-redirecting to Cloud Stream.`);
+    const wires = Array.isArray(record.engine?.swarm?.wires) ? record.engine.swarm.wires : [];
+    const seederCount = wires.filter((wire) => Boolean(wire?.isSeeder)).length;
+    console.warn(
+      `[TorrentStream] No first piece after ${FIRST_DATA_TIMEOUT_MS}ms for ${record.infoHash}; peers=${wires.length}, seeders=${seederCount}.`
+    );
     onDone();
     if (!res.headersSent) {
-      try {
-        const { getSupabaseClient } = require("./supabaseClient");
-        const supabase = getSupabaseClient();
-        const { data } = await supabase
-          .from("media_sources")
-          .select("media_id, media_title, payload")
-          .or(`stream_url.ilike.%${record.infoHash}%,download_url.ilike.%${record.infoHash}%,magnet_link.ilike.%${record.infoHash}%`)
-          .limit(1);
-
-        const item = data?.[0];
-        const tmdbId = req.query.tmdbId || req.query.id || item?.payload?.tmdb_id || item?.media_id;
-        const season = req.query.season || req.query.s || item?.payload?.season;
-        const episode = req.query.episode || req.query.ep || item?.payload?.episode;
-
-        if (tmdbId) {
-          const cleanId = String(tmdbId).replace(/^[^\d]+/, "");
-          const fallbackUrl = season && episode
-            ? `https://vidlink.pro/tv/${cleanId}/${season}/${episode}`
-            : `https://vidlink.pro/movie/${cleanId}`;
-          return res.redirect(302, fallbackUrl);
-        }
-      } catch (_) {}
-
       res.status(504).json({
         ok: false,
-        error: "Torrent swarm is currently inactive. Please choose another quality or language.",
+        code: "TORRENT_FIRST_PIECE_TIMEOUT",
+        error: "No torrent peer delivered the first video piece before timeout.",
         infoHash: record.infoHash,
+        fileName,
+        swarm: { peerCount: wires.length, seederCount },
+        retryable: true,
       });
     }
-  }, 6000);
+  }, FIRST_DATA_TIMEOUT_MS);
 
   req.on("close", onDone);
   res.on("close", onDone);

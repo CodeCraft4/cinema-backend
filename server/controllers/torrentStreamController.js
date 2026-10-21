@@ -29,41 +29,16 @@ const handleTorrentStream = asyncHandler(async (req, res) => {
   const magnet = normalizeMagnet(magnetQuery || target);
 
   const isDownload = req.query.download === "1" || req.path.includes("/download/");
-  const ep = req.query.episode || req.query.ep;
-  const s = req.query.season || req.query.s;
-
-  // P2P Streaming Engine: Enabled by default on dedicated VPS.
+  // Serve torrent media only from this API. Never send native clients to embed players.
   const enableP2P = process.env.ENABLE_P2P_TORRENT !== "false";
   if (!enableP2P && infoHash) {
-    try {
-      const { getSupabaseClient } = require("../services/supabaseClient");
-      const supabase = getSupabaseClient();
-      const { data } = await supabase
-        .from("media_sources")
-        .select("media_id, media_title, payload")
-        .or(`stream_url.ilike.%${infoHash}%,download_url.ilike.%${infoHash}%,magnet_link.ilike.%${infoHash}%`)
-        .limit(1);
-
-      const item = data?.[0];
-      const tmdbId = item?.payload?.tmdb_id || item?.media_id;
-      const season = s || item?.payload?.season;
-      const episode = ep || item?.payload?.episode;
-
-      if (tmdbId) {
-        const cleanId = String(tmdbId).replace(/^[^\d]+/, "");
-        const streamUrl = season && episode
-          ? `https://vidlink.pro/tv/${cleanId}/${season}/${episode}`
-          : `https://vidlink.pro/movie/${cleanId}`;
-        console.log(`[SafeCloudMode] Railway protected: redirecting ${infoHash} to CDN stream -> ${streamUrl}`);
-        return res.redirect(302, streamUrl);
-      }
-
-      console.warn(`[SafeCloudMode] tmdbId not found for ${infoHash}, redirecting to fallback embed stream`);
-      return res.redirect(302, `https://player.autoembed.cc/embed/movie/${infoHash}`);
-    } catch (err) {
-      console.warn("[SafeCloudMode] Lookup error:", err.message);
-      return res.redirect(302, `https://player.autoembed.cc/embed/movie/${infoHash}`);
-    }
+    return res.status(503).json({
+      ok: false,
+      code: "P2P_TORRENT_DISABLED",
+      error: "P2P torrent streaming is disabled on this server.",
+      infoHash,
+      retryable: false,
+    });
   }
 
   return streamTorrentToHttp(req, res, {
