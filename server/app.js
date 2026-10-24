@@ -13,10 +13,24 @@ const { getMediaSources } = require("./controllers/mediaDownloadController");
 const { requestLogger } = require("./middleware/requestLogger");
 const { notFoundHandler, errorHandler } = require("./middleware/errorHandler");
 const env = require("./config/env");
+const streamRoutes = require("./routes/streamRoutes");
 
 const app = express();
 
 app.disable("x-powered-by");
+
+// Global CORS Middleware for Web & Cross-Origin Mobile Playback
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Range, Authorization, Accept, Origin");
+  res.header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, ETag");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 app.use(express.json({ limit: "256kb" }));
 app.use(requestLogger);
 
@@ -46,6 +60,9 @@ app.use("/api/media", mediaRoutes);
 // Plural + list aliases — frontend may call either spelling.
 app.use("/api/media/download-sources", downloadSourceRouter);
 app.get("/api/media/sources", getMediaSources);
+
+// Clean direct HLS & Download Resolver routes: /api/stream/:tmdbId, /api/download/:tmdbId
+app.use("/api", streamRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
