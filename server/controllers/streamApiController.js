@@ -81,7 +81,7 @@ const getStream = asyncHandler(async (req, res) => {
 
       let dbQuery = supabase
         .from("media_sources")
-        .select("id, media_id, media_title, stream_url, download_url, language, quality, source_type")
+        .select("id, media_id, media_title, stream_url, download_url, magnet_link, language, quality, source_type")
         .limit(10);
 
       if (isTv) {
@@ -93,30 +93,18 @@ const getStream = asyncHandler(async (req, res) => {
       const { data: sources, error } = await dbQuery;
 
       if (!error && sources && sources.length > 0) {
-        // 1. Direct HLS (.m3u8) or HTTPS direct file
-        const hlsSource = sources.find(
-          (s) =>
-            s.stream_url &&
-            !s.stream_url.includes("/stream/torrent/") &&
-            (s.stream_url.includes(".m3u8") || s.stream_url.startsWith("https://"))
-        );
+        // Priority 1: Match Hindi or Dual Audio source
+        const hindiOrDual = sources.find((s) => {
+          const lang = String(s.language || "").toLowerCase();
+          return lang.includes("hindi") || lang.includes("dual");
+        });
 
-        if (hlsSource) {
-          directStreamUrl = hlsSource.stream_url;
-          directDownloadUrl = hlsSource.download_url || hlsSource.stream_url;
-        }
+        const activeSource = hindiOrDual || sources.find((s) => s.stream_url) || sources[0];
 
-        // 2. Extract torrent magnet if available in DB
-        const torrentSource = sources.find(
-          (s) =>
-            (s.download_url && s.download_url.startsWith("magnet:")) ||
-            (s.stream_url && s.stream_url.startsWith("magnet:"))
-        );
-
-        if (torrentSource) {
-          torrentMagnet = torrentSource.download_url?.startsWith("magnet:")
-            ? torrentSource.download_url
-            : torrentSource.stream_url;
+        if (activeSource && activeSource.stream_url) {
+          directStreamUrl = activeSource.stream_url;
+          directDownloadUrl = activeSource.download_url || activeSource.stream_url;
+          torrentMagnet = activeSource.magnet_link || (activeSource.download_url?.startsWith("magnet:") ? activeSource.download_url : null);
         }
       }
     } catch (e) {
@@ -198,33 +186,19 @@ const getDownload = asyncHandler(async (req, res) => {
     try {
       const { data: sources } = await supabase
         .from("media_sources")
-        .select("download_url, stream_url")
+        .select("download_url, stream_url, magnet_link, language")
         .or(`media_id.eq.${tmdbId},media_id.ilike.${tmdbId}-%`)
         .limit(10);
 
-      // Check DDL direct link
-      const ddlSource = sources?.find(
-        (s) =>
-          s.download_url &&
-          !s.download_url.startsWith("magnet:") &&
-          !s.download_url.includes("/stream/torrent/")
-      );
+      // Prioritize Hindi or Dual Audio source
+      const preferred = sources?.find((s) => {
+        const lang = String(s.language || "").toLowerCase();
+        return lang.includes("hindi") || lang.includes("dual");
+      }) || sources?.[0];
 
-      if (ddlSource) {
-        downloadUrl = ddlSource.download_url;
-      }
-
-      // Check Magnet Link
-      const magnetSource = sources?.find(
-        (s) =>
-          (s.download_url && s.download_url.startsWith("magnet:")) ||
-          (s.stream_url && s.stream_url.startsWith("magnet:"))
-      );
-
-      if (magnetSource) {
-        torrentMagnet = magnetSource.download_url?.startsWith("magnet:")
-          ? magnetSource.download_url
-          : magnetSource.stream_url;
+      if (preferred) {
+        downloadUrl = preferred.download_url || preferred.stream_url;
+        torrentMagnet = preferred.magnet_link || (preferred.download_url?.startsWith("magnet:") ? preferred.download_url : null);
       }
     } catch {}
   }
