@@ -623,8 +623,8 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
     "Cache-Control": "no-cache",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-    "Access-Control-Allow-Headers": "Range, Accept-Ranges, Content-Range, Content-Type, Content-Length",
-    "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges, Content-Disposition",
+    "Access-Control-Allow-Headers": "Origin, X-Requested-With, Content-Type, Accept, Range, Authorization",
+    "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length",
   };
 
   if (req.method === "HEAD") {

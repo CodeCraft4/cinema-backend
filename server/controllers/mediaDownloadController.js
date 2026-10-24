@@ -17,6 +17,7 @@ const { resolveDownloadLinks, buildRegionalQueries, confirmFullMovie } = require
 const { isReadyVideoFile } = require("../services/videoFile");
 const { normalizeSourceLinks, discoverCascadingTorrents, publicSize } = require("../services/torrentResolver");
 const { buildTorrentStreamUrl, extractInfoHash, getEngineEpisodeFile } = require("../services/torrentStreamEngine");
+const { memoryCache } = require("../services/memoryCache");
 
 const FAST_BUDGET_MS = 6000;
 const UNRELEASED_ERROR = "Title is unreleased. Torrents are not yet available.";
@@ -228,16 +229,35 @@ const downloadSource = asyncHandler(async (req, res) => {
 
 /** GET /api/media/sources — list cached torrent / DDL links. */
 const getMediaSources = asyncHandler(async (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range, Authorization");
+  res.header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length");
+
+  const mediaId = req.params?.mediaId ?? req.query?.media_id ?? req.query?.mediaId ?? null;
+  const title = req.query?.title ?? req.query?.q ?? "";
+  const season = req.query?.season ?? null;
+  const episode = req.query?.episode ?? null;
+  const language = req.query?.language ?? req.query?.lang ?? "";
+  const quality = req.query?.quality ?? "";
+
+  // In-Memory Cache Lookup (1-Hour TTL) to prevent Supabase over-limit loop
+  const cacheKey = `media_sources:${mediaId || ""}:${title || ""}:${season || ""}:${episode || ""}:${language || ""}:${quality || ""}`;
+  const cachedResult = memoryCache.get(cacheKey);
+  if (cachedResult) {
+    return res.json({ ...cachedResult, inMemoryCached: true });
+  }
+
   let rawItems = [];
   try {
     rawItems = await listCachedSources({
-      mediaId: req.params?.mediaId ?? req.query?.media_id ?? req.query?.mediaId ?? null,
-      title: req.query?.title ?? req.query?.q ?? "",
-      language: req.query?.language ?? req.query?.lang ?? "",
-      quality: req.query?.quality ?? "",
+      mediaId,
+      title,
+      language,
+      quality,
       limit: req.query?.limit,
-      season: req.query?.season ?? null,
-      episode: req.query?.episode ?? null,
+      season,
+      episode,
     });
   } catch (dbErr) {
     console.warn("[getMediaSources] DB query busy or error:", dbErr.message);
@@ -286,13 +306,19 @@ const getMediaSources = asyncHandler(async (req, res) => {
     }
     return item;
   });
-  return res.json({
+
+  const responsePayload = {
     ok: true,
     cached: true,
     source: "supabase",
     total: items.length,
     items,
-  });
+  };
+
+  // Cache in memory for 1 Hour (3600000 ms)
+  memoryCache.set(cacheKey, responsePayload, 3600000);
+
+  return res.json(responsePayload);
 });
 
 /** GET /api/media/catalog — only titles with a Hindi, Dual, English, or Urdu download. */

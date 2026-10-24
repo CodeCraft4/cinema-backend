@@ -12,6 +12,7 @@ const downloadSourceRouter = require("./routes/downloadSourceRoutes");
 const { getMediaSources } = require("./controllers/mediaDownloadController");
 const { requestLogger } = require("./middleware/requestLogger");
 const { notFoundHandler, errorHandler } = require("./middleware/errorHandler");
+const { apiRateLimiter } = require("./middleware/rateLimiter");
 const env = require("./config/env");
 const streamRoutes = require("./routes/streamRoutes");
 
@@ -19,14 +20,22 @@ const app = express();
 
 app.disable("x-powered-by");
 
-// Global CORS Middleware for Web & Cross-Origin Mobile Playback
+// Global CORS & Preflight Middleware for Web (localhost:8081, PWA) & Mobile
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Range, Authorization, Accept, Origin");
-  res.header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, ETag");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Range, Authorization"
+  );
+  res.header(
+    "Access-Control-Expose-Headers",
+    "Content-Range, Accept-Ranges, Content-Length, ETag"
+  );
+
+  // Preflight OPTIONS requests must immediately return 204 No Content
   if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
+    return res.status(204).end();
   }
   next();
 });
@@ -54,6 +63,9 @@ app.get("/health", (req, res) => {
     uptimeSeconds: Math.round(process.uptime()),
   });
 });
+
+// Protect API routes with rate limiter against infinite loop requests
+app.use("/api", apiRateLimiter);
 
 app.use("/api/tv-shows", tvShowsRoutes);
 app.use("/api/media", mediaRoutes);

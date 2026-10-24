@@ -112,6 +112,7 @@
     "dotenv": "^18.0.2",
     "electron-updater": "^6.6.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.1",
     "torrent-search-api": "^2.1.4",
     "torrent-stream": "^1.2.1"
   },
