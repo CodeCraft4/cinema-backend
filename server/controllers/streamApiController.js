@@ -18,13 +18,13 @@ function buildProviderUrls(tmdbId, mediaType, season = 1, episode = 1) {
 
   // 1. MultiEmbed: Top-tier coverage for Hollywood, Bollywood, Indian, Regional & Anime (Tested live 302 Found)
   const multiEmbedUrl = isTv
-    ? `https://multiembed.mov/?video_id=${id}&tmdb=1&s=${season}&e=${episode}`
-    : `https://multiembed.mov/?video_id=${id}&tmdb=1`;
+    ? `https://multiembed.mov/?video_id=${id}&tmdb=1&autoplay=1&s=${season}&e=${episode}`
+    : `https://multiembed.mov/?video_id=${id}&tmdb=1&autoplay=1`;
 
   // 2. VidSrc: Global CDN player
   const vidSrcUrl = isTv
-    ? `https://vidsrc.to/embed/tv/${id}/${season}/${episode}`
-    : `https://vidsrc.to/embed/movie/${id}`;
+    ? `https://vidsrc.to/embed/tv/${id}/${season}/${episode}?autoplay=1`
+    : `https://vidsrc.to/embed/movie/${id}?autoplay=1`;
 
   // 3. VidLink: Clean UI player
   const vidLinkUrl = isTv
