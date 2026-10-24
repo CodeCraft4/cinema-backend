@@ -118,29 +118,16 @@ const getManifest = asyncHandler(async (req, res) => {
   res.header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Range, Authorization");
   res.header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length");
-  res.header("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
-  res.header("Cache-Control", "no-cache");
-  res.header("Accept-Ranges", "bytes");
 
-  // Master playlist template with Hindi audio track DEFAULT=YES
-  const manifest = `#EXTM3U
-#EXT-X-VERSION:4
-#EXT-X-INDEPENDENT-SEGMENTS
+  if (!tmdbId) {
+    return res.status(400).send("#EXTM3U\n#EXT-X-ERROR: Missing tmdbId\n");
+  }
 
-# Audio Tracks
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-aac",NAME="Hindi",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="hi",URI="stream_hi.m3u8"
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-aac",NAME="English",DEFAULT=NO,AUTOSELECT=YES,LANGUAGE="en",URI="stream_en.m3u8"
+  const directStreamUrl = mediaType === "tv"
+    ? `https://vidlink.pro/tv/${encodeURIComponent(tmdbId)}/${season}/${episode}?primaryColor=E50914&autoplay=true`
+    : `https://vidlink.pro/movie/${encodeURIComponent(tmdbId)}?primaryColor=E50914&autoplay=true`;
 
-# Video Variants (Adaptive Bitrate)
-#EXT-X-STREAM-INF:BANDWIDTH=4500000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2",AUDIO="audio-aac"
-1080p/index.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720,CODECS="avc1.4d401f,mp4a.40.2",AUDIO="audio-aac"
-720p/index.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=854x480,CODECS="avc1.4d401f,mp4a.40.2",AUDIO="audio-aac"
-480p/index.m3u8
-`;
-
-  return res.send(manifest);
+  return res.redirect(302, directStreamUrl);
 });
 
 const getDownload = asyncHandler(async (req, res) => {

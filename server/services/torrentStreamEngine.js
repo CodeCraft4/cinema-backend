@@ -364,7 +364,7 @@ async function getOrStartEngine(magnetOrHash, { timeoutMs = 35000 } = {}) {
     let settled = false;
 
     // Wait for torrent metadata only; all media bytes are served by this API.
-    const effectiveTimeout = torrentSource instanceof Buffer ? 5000 : 15000;
+    const effectiveTimeout = torrentSource instanceof Buffer ? 3000 : 4000;
     const timeoutTimer = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -464,11 +464,42 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
   try {
     record = await getOrStartEngine(target);
   } catch (err) {
+    console.warn(`[TorrentStream] engine failed for ${requestedHash}:`, err.message);
+
+    // Graceful Cloud Stream Fallback: If swarm is dead or timed out, resolve title from Supabase & redirect to Cloud Stream
+    try {
+      const { getSupabaseClient } = require("./supabaseClient");
+      const sb = getSupabaseClient();
+      if (sb) {
+        const { data } = await sb
+          .from("media_sources")
+          .select("media_id, media_title, payload")
+          .or(`download_url.ilike.%${requestedHash}%,stream_url.ilike.%${requestedHash}%`)
+          .limit(1)
+          .maybeSingle();
+
+        const tmdbId = data?.media_id || data?.payload?.tmdb_id;
+        if (tmdbId && !isNaN(Number(String(tmdbId).split("-")[0]))) {
+          const cleanId = String(tmdbId).split("-")[0];
+          const isTv = String(tmdbId).includes("-s") || req.query.season != null;
+          const season = req.query.season || (String(tmdbId).match(/-s(\d+)/i)?.[1]) || 1;
+          const episode = req.query.episode || (String(tmdbId).match(/e(\d+)/i)?.[1]) || 1;
+          const fallbackUrl = isTv
+            ? `https://vidlink.pro/tv/${encodeURIComponent(cleanId)}/${season}/${episode}?primaryColor=E50914&autoplay=true`
+            : `https://vidlink.pro/movie/${encodeURIComponent(cleanId)}?primaryColor=E50914&autoplay=true`;
+
+          console.log(`[TorrentStream] Dead swarm for ${requestedHash}. Gracefully redirecting client to Cloud Stream (TMDB ${cleanId})`);
+          return res.redirect(302, fallbackUrl);
+        }
+      }
+    } catch (fallbackErr) {
+      console.warn("[TorrentStream] Fallback lookup error:", fallbackErr.message);
+    }
+
     const stats = err.swarm || { peerCount: 0, seederCount: 0 };
     const statusCode = err.code === "TORRENT_HAS_NO_PLAYABLE_VIDEO"
       ? 422
       : stats.peerCount === 0 ? 503 : 504;
-    console.warn(`[TorrentStream] engine failed for ${requestedHash}:`, err.message);
     return res.status(statusCode).json({
       ok: false,
       code: err.code || "TORRENT_ENGINE_UNAVAILABLE",
