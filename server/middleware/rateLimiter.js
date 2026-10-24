@@ -10,6 +10,7 @@ const apiRateLimiter = rateLimit({
   max: 120, // Max 120 requests per minute per IP
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false, default: false },
   message: {
     success: false,
     error: "Too many requests. Please wait a moment before trying again.",
@@ -29,6 +30,7 @@ const streamRateLimiter = rateLimit({
   max: 60, // Max 60 stream lookups per minute per IP
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false, default: false },
   message: {
     success: false,
     error: "Streaming request limit reached. Please wait a moment.",

@@ -18,6 +18,7 @@ const streamRoutes = require("./routes/streamRoutes");
 
 const app = express();
 
+app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
 // Global CORS & Preflight Middleware for Web (localhost:8081, PWA) & Mobile
