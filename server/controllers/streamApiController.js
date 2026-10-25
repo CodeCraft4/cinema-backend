@@ -4,6 +4,7 @@ const axios = require("axios");
 const { getSupabaseClient } = require("../services/supabaseClient");
 const { asyncHandler } = require("../utils/http");
 const { memoryCache } = require("../services/memoryCache");
+const torboxService = require("../services/torboxService");
 
 /**
  * Controller for:
@@ -112,6 +113,20 @@ const getStream = asyncHandler(async (req, res) => {
     }
   }
 
+  // Step 2.5: If TorBox is configured and magnet exists, resolve high-speed direct stream
+  let torboxData = null;
+  if (torrentMagnet) {
+    try {
+      torboxData = await torboxService.resolveDirectTorboxStream(torrentMagnet);
+      if (torboxData && torboxData.streamUrl) {
+        directStreamUrl = torboxData.streamUrl;
+        directDownloadUrl = torboxData.downloadUrl;
+      }
+    } catch (tbErr) {
+      console.warn("[streamApiController] TorBox resolution skipped:", tbErr.message);
+    }
+  }
+
   // Step 3: Multi-Provider Fallback (MultiEmbed -> VidSrc -> VidLink -> 2Embed)
   const providers = buildProviderUrls(tmdbId, mediaType, season, episode);
 
@@ -201,6 +216,18 @@ const getDownload = asyncHandler(async (req, res) => {
         torrentMagnet = preferred.magnet_link || (preferred.download_url?.startsWith("magnet:") ? preferred.download_url : null);
       }
     } catch {}
+  }
+
+  // If torrent magnet exists, attempt high-speed direct download link via TorBox
+  if (torrentMagnet) {
+    try {
+      const tb = await torboxService.resolveDirectTorboxStream(torrentMagnet);
+      if (tb && tb.downloadUrl) {
+        downloadUrl = tb.downloadUrl;
+      }
+    } catch (tbErr) {
+      console.warn("[streamApiController] TorBox download resolution skipped:", tbErr.message);
+    }
   }
 
   const providers = buildProviderUrls(tmdbId, mediaType, season, episode);

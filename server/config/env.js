@@ -179,6 +179,7 @@ const config = {
   fallbackEmbedProviders: readEnv("FALLBACK_EMBED_PROVIDERS") || "vidsrc,2embed,multiembed",
   internetArchiveAccessKey: readEnv("INTERNET_ARCHIVE_API_ACCESS_KEY"),
   internetArchiveSecretKey: readEnv("INTERNET_ARCHIVE_API_SECRET_KEY"),
+  torboxApiKey: readEnv("TORBOX_API_KEY"),
   envWarnings: warnings,
 };
 
