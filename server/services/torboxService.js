@@ -8,7 +8,7 @@
  */
 
 const env = require("../config/env");
-const memoryCache = require("./memoryCache");
+const { memoryCache } = require("./memoryCache");
 
 const TORBOX_BASE_URL = "https://api.torbox.app/v1/api";
 
