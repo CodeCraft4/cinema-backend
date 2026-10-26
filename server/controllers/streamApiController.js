@@ -100,17 +100,25 @@ const getStream = asyncHandler(async (req, res) => {
       const { data: sources, error } = await dbQuery;
 
       if (!error && sources && sources.length > 0) {
-        // Priority 1: Match Hindi or Dual Audio source
+        // Priority 1: Match Hindi or Dual Audio source (by language or title metadata)
         const hindiOrDual = sources.find((s) => {
           const lang = String(s.language || "").toLowerCase();
-          return lang.includes("hindi") || lang.includes("dual");
+          const title = String(s.media_title || "").toLowerCase();
+          return (
+            lang.includes("hindi") ||
+            lang.includes("dual") ||
+            title.includes("hindi") ||
+            title.includes("dual")
+          );
         });
 
         const activeSource = hindiOrDual || sources.find((s) => s.stream_url) || sources[0];
 
-        if (activeSource && activeSource.stream_url) {
-          directStreamUrl = activeSource.stream_url;
-          directDownloadUrl = activeSource.download_url || activeSource.stream_url;
+        if (activeSource) {
+          if (activeSource.stream_url) {
+            directStreamUrl = activeSource.stream_url;
+            directDownloadUrl = activeSource.download_url || activeSource.stream_url;
+          }
           torrentMagnet = activeSource.magnet_link || (activeSource.download_url?.startsWith("magnet:") ? activeSource.download_url : null);
         }
       }

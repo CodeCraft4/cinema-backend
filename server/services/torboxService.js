@@ -128,6 +128,11 @@ async function getTorrentFiles(torrentId) {
     const json = await res.json();
     if (json.success && json.data) {
       const item = Array.isArray(json.data) ? json.data[0] : json.data;
+      // If torrent has 0 seeds / 0% progress and is not cached (like 3 months ETA), return null to trigger instant server fallback
+      if (item && !item.cached && !item.download_present && item.progress !== 1) {
+        console.warn(`[TorboxService] Torrent ${torrentId} not ready/cached yet (progress: ${item.progress ?? 0}). Falling back to cloud servers.`);
+        return null;
+      }
       return item?.files || null;
     }
     return null;
