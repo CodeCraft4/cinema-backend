@@ -115,7 +115,11 @@ const getStream = asyncHandler(async (req, res) => {
         const activeSource = hindiOrDual || sources.find((s) => s.stream_url) || sources[0];
 
         if (activeSource) {
-          if (activeSource.stream_url) {
+          // Only assign directStreamUrl if it's a real direct CDN/HLS URL, NOT the internal VPS torrent bridge
+          if (
+            activeSource.stream_url &&
+            !activeSource.stream_url.includes("/api/media/stream/torrent/")
+          ) {
             directStreamUrl = activeSource.stream_url;
             directDownloadUrl = activeSource.download_url || activeSource.stream_url;
           }
@@ -226,7 +230,10 @@ const getDownload = asyncHandler(async (req, res) => {
       }) || sources?.[0];
 
       if (preferred) {
-        downloadUrl = preferred.download_url || preferred.stream_url;
+        const rawUrl = preferred.download_url || preferred.stream_url;
+        if (rawUrl && !rawUrl.includes("/api/media/stream/torrent/")) {
+          downloadUrl = rawUrl;
+        }
         torrentMagnet = preferred.magnet_link || (preferred.download_url?.startsWith("magnet:") ? preferred.download_url : null);
       }
     } catch {}
