@@ -332,7 +332,7 @@ async function main() {
   if (doHealAll) {
     await healAndPurgeAllDeadTorrents(supabase, { batchSize: 40, maxTotal: 15000 });
   } else if (doHeal) {
-    await healAndPurgeDeadTorrents(supabase, { maxRows: 150 });
+    await healAndPurgeAllDeadTorrents(supabase, { batchSize: 40, maxTotal: 120 });
   }
 
   console.log("\n✨ All operations finished successfully!");
