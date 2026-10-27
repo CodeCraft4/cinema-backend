@@ -168,8 +168,12 @@ const getStream = asyncHandler(async (req, res) => {
     qualities: ["auto", "1080p", "720p", "480p"],
   };
 
-  // Step 4: Save in Memory Cache (1 Hour = 3600000 ms)
-  memoryCache.set(cacheKey, responsePayload, 3600000);
+  // Step 4: Save in Memory Cache
+  // If direct TorBox 1Gbps stream is resolved, cache for 2 Hours (matches TorBox link expiry)
+  // If temporary fallback was used because TorBox is still downloading, cache for only 30 seconds so it switches to TorBox as soon as it's ready!
+  const isDirectTorbox = Boolean(torboxData && torboxData.streamUrl);
+  const cacheTtl = isDirectTorbox ? 2 * 60 * 60 * 1000 : 30 * 1000;
+  memoryCache.set(cacheKey, responsePayload, cacheTtl);
 
   return res.json(responsePayload);
 });
@@ -269,7 +273,9 @@ const getDownload = asyncHandler(async (req, res) => {
     supportsResume: true,
   };
 
-  memoryCache.set(cacheKey, downloadPayload, 3600000);
+  const isDirectTbDownload = Boolean(tb && tb.downloadUrl);
+  const dlCacheTtl = isDirectTbDownload ? 2 * 60 * 60 * 1000 : 30 * 1000;
+  memoryCache.set(cacheKey, downloadPayload, dlCacheTtl);
 
   return res.json(downloadPayload);
 });
