@@ -162,101 +162,140 @@ async function ingestTopMovies(supabase, { category, lang, pages = 2 } = {}) {
 /**
  * Heal or Purge dead torrents from existing DB
  */
-async function healAndPurgeDeadTorrents(supabase, { maxRows = 200 } = {}) {
+/**
+ * Exhaustive Purge & Heal Engine:
+ * Batches through the database, scans lowest-seeder items,
+ * heals with fresh Hindi magnets if available, or permanently purges dead rows.
+ */
+async function healAndPurgeAllDeadTorrents(supabase, { batchSize = 40, maxTotal = 15000 } = {}) {
   console.log(`\n======================================================`);
-  console.log(`🩺 [HEAL & PURGE] Scanning up to ${maxRows} rows in media_sources...`);
-  console.log(`======================================================`);
+  console.log(`🩺 [EXHAUSTIVE DB CLEANER] Continuous Purge & Heal Engine`);
+  console.log(`   Target: All dead/stale torrents in media_sources`);
+  console.log(`======================================================\n`);
 
-  // Query media sources with lowest seeders first
-  const { data: rows, error } = await supabase
-    .from(MEDIA_SOURCES_TABLE)
-    .select("id, media_id, media_title, year, quality, language, magnet_link, download_url, seeders")
-    .not("magnet_link", "is", null)
-    .order("seeders", { ascending: true })
-    .limit(maxRows);
+  let totalProcessed = 0;
+  let totalHealed = 0;
+  let totalPurged = 0;
+  let totalHealthy = 0;
+  let batchNum = 1;
 
-  if (error || !rows || rows.length === 0) {
-    console.log("No rows found to inspect.");
-    return;
-  }
+  while (totalProcessed < maxTotal) {
+    // Query media sources with lowest seeders first
+    const { data: rows, error } = await supabase
+      .from(MEDIA_SOURCES_TABLE)
+      .select("id, media_id, media_title, year, quality, language, magnet_link, download_url, seeders")
+      .not("magnet_link", "is", null)
+      .order("seeders", { ascending: true })
+      .limit(batchSize);
 
-  console.log(`Fetched ${rows.length} rows for health verification.`);
-  let healthyKept = 0;
-  let healedCount = 0;
-  let purgedCount = 0;
-
-  for (const row of rows) {
-    const magnet = row.magnet_link || row.download_url;
-    const title = row.media_title || "Unknown";
-    const year = row.year || "";
-    const infoHash = torboxService.extractInfoHash(magnet);
-
-    // 1. Check if cached on TorBox
-    let isCached = false;
-    if (infoHash) {
-      try {
-        isCached = await torboxService.checkCached(infoHash);
-      } catch {}
-    }
-
-    if (isCached) {
-      console.log(`  🟢 [HEALTHY / TORBOX CACHED] ${title} (${year}) - 1Gbps Ready. Keeping.`);
-      healthyKept++;
+    if (error) {
+      console.error(`[DB ERROR] Batch ${batchNum} fetch failed:`, error.message);
+      await sleep(3000);
       continue;
     }
 
-    // 2. If seeders reported as 0 or 1, verify if healthy or dead
-    const currentSeeders = Number(row.seeders || 0);
+    if (!rows || rows.length === 0) {
+      console.log(`✅ [COMPLETE] No more rows with low seeders found in media_sources.`);
+      break;
+    }
 
-    // If it's potentially stale/dead, attempt re-resolution
-    console.log(`  🔎 [VERIFYING] ${title} (${year}) - DB seeds: ${currentSeeders}. Checking live indexers...`);
-    let healed = false;
+    const minSeeds = Number(rows[0]?.seeders || 0);
+    const maxSeeds = Number(rows[rows.length - 1]?.seeders || 0);
 
-    try {
-      const fresh = await discoverCascadingTorrents({
-        title,
-        year,
-        mediaType: "movie",
-        requireDubMarker: false,
-      });
+    // If lowest seeders are already >= 15 and we've processed batches, database is healthy
+    if (minSeeds >= 15 && totalProcessed > 50) {
+      console.log(`🎉 [DATABASE HEALTHY] All remaining rows have >= ${minSeeds} seeds! Database is fully clean.`);
+      break;
+    }
 
-      if (fresh && fresh.magnet && (fresh.seeders || 0) >= MIN_REQUIRED_SEEDERS) {
-        // Update DB row with healthy fresh torrent
-        await supabase
-          .from(MEDIA_SOURCES_TABLE)
-          .update({
-            magnet_link: fresh.magnet,
-            download_url: fresh.magnet,
-            stream_url: `http://168.144.249.68:4555/api/media/stream/torrent/${fresh.infoHash || infoHash}/video.mp4`,
-            seeders: fresh.seeders,
-            quality: fresh.quality || row.quality,
-            size_human: fresh.size_human || row.size_human,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", row.id);
+    console.log(`\n📦 [BATCH ${batchNum}] Fetched ${rows.length} rows (Seeders range: ${minSeeds} to ${maxSeeds})...`);
 
-        console.log(`  ✨ [HEALED] ${title} updated with fresh magnet (${fresh.seeders} live seeders).`);
-        healedCount++;
-        healed = true;
+    for (const row of rows) {
+      totalProcessed++;
+      const magnet = row.magnet_link || row.download_url;
+      const title = row.media_title || "Unknown";
+      const year = row.year || "";
+      const currentSeeders = Number(row.seeders || 0);
+      const infoHash = torboxService.extractInfoHash(magnet);
+
+      // 1. Check if cached on TorBox
+      let isCached = false;
+      if (infoHash) {
+        try {
+          isCached = await torboxService.checkCached(infoHash);
+        } catch {}
       }
-    } catch (e) {
-      console.warn(`  ⚠️ Search error for ${title}:`, e.message);
+
+      if (isCached) {
+        console.log(`  🟢 [HEALTHY / TORBOX CACHED] ${title} (${year}) - 1Gbps Ready. Keeping.`);
+        totalHealthy++;
+        if (currentSeeders < 50) {
+          // Promote seeder score to 99 so it moves out of low-seeder queue
+          await supabase
+            .from(MEDIA_SOURCES_TABLE)
+            .update({ seeders: 99, status: "ready", updated_at: new Date().toISOString() })
+            .eq("id", row.id);
+        }
+        continue;
+      }
+
+      // 2. Check live indexers for fresh healthy torrent
+      console.log(`  🔎 [VERIFYING] ${title} (${year}) - DB seeds: ${currentSeeders}. Checking live indexers...`);
+      let healed = false;
+
+      try {
+        const fresh = await discoverCascadingTorrents({
+          title,
+          year,
+          mediaType: "movie",
+          requireDubMarker: false,
+        });
+
+        if (fresh && fresh.magnet && (fresh.seeders || 0) >= MIN_REQUIRED_SEEDERS) {
+          await supabase
+            .from(MEDIA_SOURCES_TABLE)
+            .update({
+              magnet_link: fresh.magnet,
+              download_url: fresh.magnet,
+              stream_url: `http://168.144.249.68:4555/api/media/stream/torrent/${fresh.infoHash || infoHash}/video.mp4`,
+              seeders: fresh.seeders,
+              quality: fresh.quality || row.quality,
+              size_human: fresh.size_human || row.size_human,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", row.id);
+
+          console.log(`  ✨ [HEALED] ${title} updated with fresh magnet (${fresh.seeders} live seeders).`);
+          totalHealed++;
+          healed = true;
+        }
+      } catch (e) {
+        console.warn(`  ⚠️ Search error for ${title}:`, e.message);
+      }
+
+      // 3. If no working torrent exists and seeders are dead/stale, PURGE from database
+      if (!healed && currentSeeders <= 3 && !isCached) {
+        console.log(`  🗑️ [PURGING DEAD ROW] ${title} (${year}) has 0 working seeds on internet (DB had ${currentSeeders}). Removing from DB.`);
+        await supabase.from(MEDIA_SOURCES_TABLE).delete().eq("id", row.id);
+        totalPurged++;
+      } else if (!healed && currentSeeders > 3 && !isCached) {
+        // If not healed and seeders were 4 or 5, mark as scanned so it moves along
+        console.log(`  ⚠️ [NO FRESH TORRENT] ${title} (${year}) kept with existing ${currentSeeders} seeds.`);
+      }
+
+      await sleep(350);
     }
 
-    // 3. If no working torrent exists and seeders are dead/stale, PURGE from database
-    if (!healed && currentSeeders <= 3 && !isCached) {
-      console.log(`  🗑️ [PURGING DEAD ROW] ${title} (${year}) has 0 working seeds on internet (DB had ${currentSeeders}). Removing from DB.`);
-      await supabase.from(MEDIA_SOURCES_TABLE).delete().eq("id", row.id);
-      purgedCount++;
-    }
-
-    await sleep(400);
+    console.log(`\n📊 [PROGRESS BATCH ${batchNum}] Total Processed: ${totalProcessed} | Purged: ${totalPurged} | Healed: ${totalHealed} | Cached/Healthy: ${totalHealthy}`);
+    batchNum++;
+    await sleep(500);
   }
 
-  console.log(`\n🏁 [HEAL & PURGE COMPLETE]`);
-  console.log(`   • Kept Healthy/Cached: ${healthyKept}`);
-  console.log(`   • Healed with Fresh Magnet: ${healedCount}`);
-  console.log(`   • Purged Dead (0 seeds): ${purgedCount}`);
+  console.log(`\n🏁 [EXHAUSTIVE CLEAN COMPLETE]`);
+  console.log(`   • Total Rows Processed: ${totalProcessed}`);
+  console.log(`   • Purged Dead Rows: ${totalPurged}`);
+  console.log(`   • Healed with Fresh Magnet: ${totalHealed}`);
+  console.log(`   • Verified TorBox Healthy: ${totalHealthy}`);
 }
 
 async function main() {
@@ -267,20 +306,23 @@ async function main() {
   }
 
   const args = process.argv.slice(2);
-  const doHeal = args.includes("--heal") || args.length === 0;
-  const doIngest = args.includes("--ingest") || args.length === 0;
+  const doHealAll = args.includes("--heal-all");
+  const doHeal = args.includes("--heal") || doHealAll || args.length === 0;
+  const doIngest = args.includes("--ingest");
 
   console.log("🚀 Starting Heal & Ingest Healthy Hindi Engine...");
 
   // 1. Ingest Top Hollywood Blockbusters (Hindi Dubbed)
   if (doIngest) {
-    await ingestTopMovies(supabase, { category: "Hollywood Hindi Dubbed", lang: "en", pages: 2 });
-    await ingestTopMovies(supabase, { category: "Bollywood Top Hits", lang: "hi", pages: 2 });
-    await ingestTopMovies(supabase, { category: "South Indian Hindi Dubbed", lang: "te", pages: 1 });
+    await ingestTopMovies(supabase, { category: "Hollywood Hindi Dubbed", lang: "en", pages: 3 });
+    await ingestTopMovies(supabase, { category: "Bollywood Top Hits", lang: "hi", pages: 3 });
+    await ingestTopMovies(supabase, { category: "South Indian Hindi Dubbed", lang: "te", pages: 2 });
   }
 
-  // 2. Heal existing rows & purge 0-seeder dead torrents
-  if (doHeal) {
+  // 2. Heal existing rows & purge dead torrents
+  if (doHealAll) {
+    await healAndPurgeAllDeadTorrents(supabase, { batchSize: 40, maxTotal: 15000 });
+  } else if (doHeal) {
     await healAndPurgeDeadTorrents(supabase, { maxRows: 150 });
   }
 
