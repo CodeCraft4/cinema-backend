@@ -209,6 +209,7 @@ async function healAndPurgeAllDeadTorrents(supabase, { batchSize = 40, maxTotal 
     }
 
     console.log(`\n📦 [BATCH ${batchNum}] Fetched ${rows.length} rows (Seeders range: ${minSeeds} to ${maxSeeds})...`);
+    const batchDeadIds = [];
 
     for (const row of rows) {
       totalProcessed++;
@@ -273,17 +274,25 @@ async function healAndPurgeAllDeadTorrents(supabase, { batchSize = 40, maxTotal 
         console.warn(`  ⚠️ Search error for ${title}:`, e.message);
       }
 
-      // 3. If no working torrent exists and seeders are dead/stale, PURGE from database
+      // 3. If no working torrent exists and seeders are dead/stale, collect for batch purge
       if (!healed && currentSeeders <= 3 && !isCached) {
-        console.log(`  🗑️ [PURGING DEAD ROW] ${title} (${year}) has 0 working seeds on internet (DB had ${currentSeeders}). Removing from DB.`);
-        await supabase.from(MEDIA_SOURCES_TABLE).delete().eq("id", row.id);
+        console.log(`  🗑️ [MARKED DEAD] ${title} (${year}) - no seeds (DB had ${currentSeeders}). Will purge in batch.`);
+        batchDeadIds.push(row.id);
         totalPurged++;
       } else if (!healed && currentSeeders > 3 && !isCached) {
-        // If not healed and seeders were 4 or 5, mark as scanned so it moves along
         console.log(`  ⚠️ [NO FRESH TORRENT] ${title} (${year}) kept with existing ${currentSeeders} seeds.`);
       }
 
-      await sleep(350);
+      await sleep(300);
+    }
+
+    // Execute single batch delete for all dead rows in this batch to minimize Supabase Log Ingestion
+    if (batchDeadIds.length > 0) {
+      console.log(`  🔥 [BATCH PURGE] Purging ${batchDeadIds.length} dead rows in single Supabase request...`);
+      const { error: delErr } = await supabase.from(MEDIA_SOURCES_TABLE).delete().in("id", batchDeadIds);
+      if (delErr) {
+        console.warn(`  ⚠️ Batch purge error:`, delErr.message);
+      }
     }
 
     console.log(`\n📊 [PROGRESS BATCH ${batchNum}] Total Processed: ${totalProcessed} | Purged: ${totalPurged} | Healed: ${totalHealed} | Cached/Healthy: ${totalHealthy}`);
