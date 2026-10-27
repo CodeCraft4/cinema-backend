@@ -252,10 +252,12 @@ async function storeTorrents(content, sources) {
 async function ensureTorrents(content) {
   const mediaId = String(content.external_id || "");
   const have = mediaId ? await existingSourceLanguages(mediaId) : [];
-  const haveLanguages = new Set(have.map((row) => row.language));
+  // Only consider sources with positive seeders or valid cache as existing
+  const activeSources = have.filter((row) => row.seeders == null || Number(row.seeders) > 0);
+  const haveLanguages = new Set(activeSources.map((row) => row.language));
   const missing = WANTED_LANGUAGES.filter((language) => !haveLanguages.has(language));
   if (!missing.length || isFutureRelease(content.details || {})) {
-    return have.map(presentSource);
+    return activeSources.map(presentSource);
   }
   let found = [];
   try {
@@ -266,7 +268,7 @@ async function ensureTorrents(content) {
   const fresh = found.filter((source) => missing.includes(source.language));
   if (fresh.length) await storeTorrents(content, fresh);
   const after = mediaId ? await existingSourceLanguages(mediaId) : [];
-  return after.map(presentSource);
+  return after.filter((row) => row.seeders == null || Number(row.seeders) > 0).map(presentSource);
 }
 
 async function fetchAndStore(title, { year = "", mediaType = "" } = {}) {

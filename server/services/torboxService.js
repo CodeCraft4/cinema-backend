@@ -51,7 +51,7 @@ async function checkCached(hash) {
       `${TORBOX_BASE_URL}/torrents/checkcached?hash=${hash}&format=object`,
       {
         headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(4000),
+        signal: AbortSignal.timeout(8000),
       }
     );
 
