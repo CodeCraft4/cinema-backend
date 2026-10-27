@@ -100,7 +100,10 @@ async function ingestTopMovies(supabase, { category, lang, pages = 2 } = {}) {
           requireDubMarker: lang !== "hi", // Bollywood movies don't need "dubbed" marker
         });
 
-        if (result && result.magnet && (result.seeders || 0) >= MIN_REQUIRED_SEEDERS) {
+        const magnet = result?.magnet_link || result?.magnet || result?.download_url;
+        const liveSeeds = Number(result?.seeders || 0);
+
+        if (result && magnet && liveSeeds >= MIN_REQUIRED_SEEDERS) {
           // Upsert into media_content first
           await supabase.from(MEDIA_CONTENT_TABLE).upsert(
             {
@@ -135,8 +138,8 @@ async function ingestTopMovies(supabase, { category, lang, pages = 2 } = {}) {
             {
               ...result,
               title: result.title || title,
-              magnet: result.magnet,
-              seeders: result.seeders,
+              magnet: magnet,
+              seeders: liveSeeds,
               quality: result.quality || "1080p",
               language: result.language || "Hindi",
               language_label: result.language_label || "Hindi",
