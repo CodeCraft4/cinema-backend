@@ -57,6 +57,7 @@ const getStream = asyncHandler(async (req, res) => {
   const season = req.query.season ? Number(req.query.season) : 1;
   const episode = req.query.episode ? Number(req.query.episode) : 1;
   const audio = String(req.query.audio || "hi").toLowerCase();
+  const quality = String(req.query.quality || "auto").toLowerCase();
 
   if (!tmdbId) {
     return res.status(400).json({ success: false, error: "Missing tmdbId" });
@@ -70,7 +71,7 @@ const getStream = asyncHandler(async (req, res) => {
   res.header("Content-Type", "application/json; charset=utf-8");
 
   // Step 1: Check In-Memory Cache (1-Hour TTL) to prevent DB over-limit
-  const cacheKey = `stream:${tmdbId}:${mediaType}:${season}:${episode}:${audio}`;
+  const cacheKey = `stream:${tmdbId}:${mediaType}:${season}:${episode}:${audio}:${quality}`;
   const cachedStream = memoryCache.get(cacheKey);
   if (cachedStream) {
     return res.json({ ...cachedStream, cached: true });
@@ -112,7 +113,18 @@ const getStream = asyncHandler(async (req, res) => {
           );
         });
 
-        const activeSource = hindiOrDual || sources.find((s) => s.stream_url) || sources[0];
+        // Priority 1.5: If user specifically requested 720p or 480p, pick matching source
+        let matchingQuality = null;
+        if (quality !== "auto") {
+          matchingQuality = sources.find((s) => {
+            const lang = String(s.language || "").toLowerCase();
+            const q = String(s.quality || "").toLowerCase();
+            const isHindi = lang.includes("hindi") || lang.includes("dual") || String(s.media_title || "").toLowerCase().includes("hindi");
+            return isHindi && q.includes(quality);
+          });
+        }
+
+        const activeSource = matchingQuality || hindiOrDual || sources.find((s) => s.stream_url) || sources[0];
 
         if (activeSource) {
           // Only assign directStreamUrl if it's a real direct CDN/HLS URL, NOT the internal VPS torrent bridge
