@@ -256,9 +256,10 @@ const getDownload = asyncHandler(async (req, res) => {
   }
 
   // If torrent magnet exists, attempt high-speed direct download link via TorBox
+  let tb = null;
   if (torrentMagnet) {
     try {
-      const tb = await torboxService.resolveDirectTorboxStream(torrentMagnet);
+      tb = await torboxService.resolveDirectTorboxStream(torrentMagnet);
       if (tb && tb.downloadUrl) {
         downloadUrl = tb.downloadUrl;
       }
