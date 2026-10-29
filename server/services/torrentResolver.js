@@ -215,9 +215,11 @@ function acceptTorrentRelease({ title, sizeBytes, size, quality, mediaType, meta
   // entirely, can never prove it has live uploads, so presenting it would
   // 503 with TORRENT_NO_PEERS for every client that tries it.
   if (seeders == null || Number(seeders) < MIN_SEEDERS) return { ok: false };
+  if (mediaType === "movie" && /\b(?:s\d{1,2}e\d{1,2}|s0\d|season\s*\d+|episode\s*\d+|ep\s*\d+)\b/i.test(`${name} ${extra}`)) return { ok: false };
 
   const detected = detectQuality(quality) || detectQuality(name) || detectQuality(extra) || "1080p";
   const kind = releaseKind(`${name} ${extra}`, mediaType);
+  if (mediaType === "movie" && kind !== "movie") return { ok: false };
   if (kind === "season") {
     if (bytes <= SEASON_PACK_FLOOR_BYTES) return { ok: false };
   } else {
@@ -407,11 +409,10 @@ function matchesTargetTitle(candidateTitle, targetTitle) {
     return cWords.has(singleWord) || c.includes(singleWord);
   }
 
-  let matchCount = 0;
   for (const w of tWords) {
-    if (cWords.has(w) || c.includes(w)) matchCount++;
+    if (!cWords.has(w)) return false;
   }
-  return matchCount >= Math.ceil(tWords.length * 0.5);
+  return true;
 }
 
 function rankValidReleases(items, mediaType, expectedTitle = "", targetSeason = null, targetEpisode = null) {
