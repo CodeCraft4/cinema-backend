@@ -101,30 +101,58 @@ const getStream = asyncHandler(async (req, res) => {
       const { data: sources, error } = await dbQuery;
 
       if (!error && sources && sources.length > 0) {
-        // Priority 1: Match Hindi or Dual Audio source (by language or title metadata)
-        const hindiOrDual = sources.find((s) => {
+        // Helper: verify that audio release is genuinely Hindi / Hindi Dual, not foreign dual
+        const isForeignNonHindi = (text) => {
+          const lower = String(text || "").toLowerCase();
+          if (lower.includes("hindi") || lower.includes("hin")) return false;
+          return /codigo|vinganca|portugues|latino|french|spanish|russian|italian|german|polish|brazilian/.test(lower);
+        };
+
+        const isGenuineHindiOrDual = (s) => {
           const lang = String(s.language || "").toLowerCase();
           const title = String(s.media_title || "").toLowerCase();
+          const magnet = String(s.magnet_link || s.download_url || "").toLowerCase();
+
+          if (isForeignNonHindi(magnet) || isForeignNonHindi(lang)) {
+            return false;
+          }
+
+          // South Indian movies (Tamil, Telugu, Malayalam, Kannada) must explicitly have Hindi dubbing/dual
+          const isSouth = /tamil|telugu|malayalam|kannada/.test(magnet) || /tamil|telugu|malayalam|kannada/.test(lang);
+          if (isSouth) {
+            return /hindi|\bhin\b|dubbed/.test(magnet) || /hindi|\bhin\b|dubbed/.test(lang) || /hindi/.test(title);
+          }
+
           return (
             lang.includes("hindi") ||
-            lang.includes("dual") ||
+            (lang.includes("dual") && (lang.includes("hindi") || magnet.includes("hindi") || !/foreign/.test(lang))) ||
             title.includes("hindi") ||
-            title.includes("dual")
+            magnet.includes("hindi") ||
+            magnet.includes("dubbed")
           );
-        });
+        };
+
+        // Priority 1: Match genuine Hindi or Dual Audio source
+        const hindiOrDual = sources.find(isGenuineHindiOrDual);
 
         // Priority 1.5: If user specifically requested 720p or 480p, pick matching source
         let matchingQuality = null;
         if (quality !== "auto") {
           matchingQuality = sources.find((s) => {
-            const lang = String(s.language || "").toLowerCase();
             const q = String(s.quality || "").toLowerCase();
-            const isHindi = lang.includes("hindi") || lang.includes("dual") || String(s.media_title || "").toLowerCase().includes("hindi");
-            return isHindi && q.includes(quality);
+            return isGenuineHindiOrDual(s) && q.includes(quality);
           });
         }
 
-        const activeSource = matchingQuality || hindiOrDual || sources.find((s) => s.stream_url) || sources[0];
+        let activeSource = null;
+        if (matchingQuality) {
+          activeSource = matchingQuality;
+        } else if (hindiOrDual) {
+          activeSource = hindiOrDual;
+        } else if (audio !== "hi") {
+          // Only pick English/original sources if the user did not specifically request Hindi
+          activeSource = sources.find((s) => s.stream_url) || sources[0];
+        }
 
         if (activeSource) {
           // Only assign directStreamUrl if it's a real direct CDN/HLS URL, NOT the internal VPS torrent bridge
