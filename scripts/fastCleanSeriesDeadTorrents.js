@@ -187,26 +187,37 @@ async function main() {
 
     lastSeenId = rows[rows.length - 1].id;
 
-    const hashToRow = new Map();
+    const hashToRows = new Map();
+    const deadIdsToPurge = [];
+
     for (const row of rows) {
       const magnet = row.magnet_link || row.download_url;
       const h = torboxService.extractInfoHash(magnet);
-      if (h) hashToRow.set(h.toLowerCase(), row);
+      if (h) {
+        const key = h.toLowerCase();
+        if (!hashToRows.has(key)) hashToRows.set(key, []);
+        hashToRows.get(key).push(row);
+      } else {
+        // Corrupted magnet or missing hash -> dead
+        deadIdsToPurge.push(row.id);
+        totalProcessed++;
+      }
     }
 
-    const hashes = Array.from(hashToRow.keys());
+    const hashes = Array.from(hashToRows.keys());
 
     // 2. Check TorBox 1Gbps Cache
     const torboxCachedMap = await checkTorboxBatch(hashes);
     const uncachedHashes = [];
 
     for (const h of hashes) {
-      const row = hashToRow.get(h);
+      const matchedRows = hashToRows.get(h) || [];
       if (torboxCachedMap[h] || torboxCachedMap[h.toUpperCase()]) {
-        totalCached++;
-        totalProcessed++;
-        if (Number(row.seeders || 0) < 50) {
-          await supabase.from(MEDIA_SOURCES_TABLE).update({ seeders: 99, status: "ready" }).eq("id", row.id);
+        totalCached += matchedRows.length;
+        totalProcessed += matchedRows.length;
+        const lowSeedIds = matchedRows.filter((r) => Number(r.seeders || 0) < 50).map((r) => r.id);
+        if (lowSeedIds.length > 0) {
+          await supabase.from(MEDIA_SOURCES_TABLE).update({ seeders: 99, status: "ready" }).in("id", lowSeedIds);
         }
       } else {
         uncachedHashes.push(h);
@@ -215,19 +226,20 @@ async function main() {
 
     // 3. For Uncached Hashes: UDP Multi-Tracker Scrape
     const trackerScrapeMap = await getLiveSeedsMultiTracker(uncachedHashes);
-    const deadIdsToPurge = [];
 
     for (const h of uncachedHashes) {
-      totalProcessed++;
-      const row = hashToRow.get(h);
+      const matchedRows = hashToRows.get(h) || [];
       const trackerData = trackerScrapeMap[h];
       const liveSeeds = trackerData?.seeders || 0;
 
+      totalProcessed += matchedRows.length;
+
       if (liveSeeds >= MIN_HEALTHY_SEEDS) {
-        totalLiveSeeds++;
-        await supabase.from(MEDIA_SOURCES_TABLE).update({ seeders: liveSeeds }).eq("id", row.id);
+        totalLiveSeeds += matchedRows.length;
+        const ids = matchedRows.map((r) => r.id);
+        await supabase.from(MEDIA_SOURCES_TABLE).update({ seeders: liveSeeds }).in("id", ids);
       } else {
-        deadIdsToPurge.push(row.id);
+        matchedRows.forEach((r) => deadIdsToPurge.push(r.id));
       }
     }
 
