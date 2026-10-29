@@ -43,7 +43,8 @@
     "dist:dir": "npx electron-builder --win --dir --config.win.signAndEditExecutable=false",
     "ingest:asian": "node scripts/ingestAsianSeries300.js",
     "ingest:desi": "node scripts/ingestDesiSeries300.js",
-    "ingest:global": "node scripts/ingestTopGlobalHindiCinema.js"
+    "ingest:global": "node scripts/ingestTopGlobalHindiCinema.js",
+    "clean:movies": "node scripts/fastCleanMoviesDeadTorrents.js"
   },
   "build": {
     "appId": "com.cinebroad.app",
