@@ -13,6 +13,20 @@
  */
 
 require("dotenv").config();
+
+// Polyfill WebSocket in environments (like Node.js 20 or VPS) without native WebSocket
+if (typeof globalThis.WebSocket === "undefined") {
+  globalThis.WebSocket = class WebSocketPolyfill {
+    constructor() {
+      this.readyState = 0;
+    }
+    addEventListener() {}
+    removeEventListener() {}
+    send() {}
+    close() {}
+  };
+}
+
 const { createClient } = require("@supabase/supabase-js");
 
 const SUPABASE_URL = process.env.SUPABASE_URL || "https://your-supabase.supabase.co";
@@ -34,7 +48,8 @@ function getSupabase() {
     throw new Error("Missing Supabase credentials in .env");
   }
   return createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: { persistSession: false },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    realtime: { enabled: false },
   });
 }
 
