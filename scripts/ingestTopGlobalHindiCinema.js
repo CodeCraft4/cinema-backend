@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * 🌍 Global Top Hindi Cinema Ingestion & Dead-Seeder Purge Engine
+ * 🌍 Global Top Hindi Cinema Ingest & Dead-Purge Engine
  *
  * Targets Top & Trending Cinema (Last 3 Years: 2023 - 2026):
  * - 🇮🇳 Bollywood (Hindi)
@@ -15,8 +15,9 @@
  *
  * Strict Rules:
  * 1. ZERO 0-SEEDERS: Only torrents with >= 5 live seeders on internet are saved.
- * 2. AUTO-PURGE DEAD: If an existing DB movie has 0 or dead seeds and no fresh magnet exists, it is permanently removed from Supabase.
- * 3. SKIP HEALTHY: If already in Supabase with live healthy seeds, skip to save bandwidth.
+ * 2. 480p, 720p, 1080p ONLY: Ignores 4K / 2160p to prevent mobile buffering and quota drain.
+ * 3. AUTO-PURGE DEAD: If an existing DB movie has 0 seeds and no fresh magnet exists, it is permanently removed from Supabase.
+ * 4. SKIP HEALTHY: If already in Supabase with live healthy seeds, skip to save bandwidth.
  */
 
 const { getSupabaseClient, MEDIA_CONTENT_TABLE, MEDIA_SOURCES_TABLE } = require("../server/services/supabaseClient");
@@ -133,8 +134,10 @@ async function processIndustry(supabase, industry, { pages = 2, minSeeders = DEF
 
         const liveSeeds = Number(result?.seeders || 0);
         const magnet = result?.magnet_link || result?.magnet || result?.download_url;
+        const is4K = result?.quality === "2160p" || /\b(?:2160p|4k|uhd)\b/i.test(result?.title || "");
 
-        if (result && magnet && liveSeeds >= minSeeders) {
+        // Only accept if seeds >= minSeeders AND NOT 4K (480p, 720p, 1080p only)
+        if (result && magnet && liveSeeds >= minSeeders && !is4K) {
           // Healthy torrent found with >= minSeeders!
           // Upsert content
           await supabase.from(MEDIA_CONTENT_TABLE).upsert(
@@ -225,6 +228,7 @@ async function main() {
   console.log("==================================================================");
   console.log("🚀 Starting Global Top Hindi Cinema Ingest & Dead-Purge Engine");
   console.log(`   Filter: Released ${START_YEAR.slice(0, 4)} - ${END_YEAR.slice(0, 4)}`);
+  console.log(`   Qualities Accepted: 480p, 720p, 1080p (4K Ignored)`);
   console.log(`   Pages per Category: ${pagesArg} | Min Required Live Seeds: ${minSeedsArg}`);
   console.log(`   Target Industry: ${industryArg.toUpperCase()}`);
   console.log("==================================================================");
