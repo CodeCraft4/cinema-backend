@@ -169,7 +169,7 @@ async function main() {
   let totalHealed = 0;
   let totalPurged = 0;
   let batchIndex = 1;
-  let offset = 0;
+  let lastSeenId = 0;
 
   // Count total movies first
   const { count: totalMoviesInDb } = await supabase
@@ -180,20 +180,20 @@ async function main() {
 
   console.log(`📊 Total Movies in Database to inspect: ${totalMoviesInDb}\n`);
 
-  while (totalProcessed < maxLimit && offset < (totalMoviesInDb || 10000)) {
-    // 1. Fetch batch of movie rows
+  while (totalProcessed < maxLimit) {
+    // 1. Fetch batch of movie rows using Keyset Pagination (ID > lastSeenId) to prevent offset shift when deleting
     const { data: rows, error } = await supabase
       .from(MEDIA_SOURCES_TABLE)
       .select("id, media_id, media_title, year, quality, language, magnet_link, download_url, seeders")
       .not("media_id", "ilike", "%-s%")
       .not("media_id", "ilike", "%:s%")
+      .gt("id", lastSeenId)
       .order("id", { ascending: true })
-      .range(offset, offset + batchSize - 1);
+      .limit(batchSize);
 
     if (error) {
-      console.error(`[DB ERROR] Fetch failed at offset ${offset}:`, error.message);
+      console.error(`[DB ERROR] Fetch failed after ID ${lastSeenId}:`, error.message);
       await sleep(2000);
-      offset += batchSize;
       continue;
     }
 
@@ -201,6 +201,8 @@ async function main() {
       console.log("✅ All movie records scanned.");
       break;
     }
+
+    lastSeenId = rows[rows.length - 1].id;
 
     const hashToRow = new Map();
     for (const row of rows) {
@@ -305,7 +307,6 @@ async function main() {
     );
 
     batchIndex++;
-    offset += batchSize;
     await sleep(200);
   }
 

@@ -154,7 +154,7 @@ async function main() {
   let totalLiveSeeds = 0;
   let totalPurged = 0;
   let batchIndex = 1;
-  let offset = 0;
+  let lastSeenId = 0;
 
   // Count total series episodes first
   const { count: totalEpisodesInDb } = await supabase
@@ -164,19 +164,19 @@ async function main() {
 
   console.log(`📊 Total TV Episodes in Database to inspect: ${totalEpisodesInDb}\n`);
 
-  while (totalProcessed < maxLimit && offset < (totalEpisodesInDb || 15000)) {
-    // 1. Fetch batch of TV episode rows
+  while (totalProcessed < maxLimit) {
+    // 1. Fetch batch of TV episode rows using Keyset Pagination (ID > lastSeenId)
     const { data: rows, error } = await supabase
       .from(MEDIA_SOURCES_TABLE)
       .select("id, media_id, media_title, year, quality, language, magnet_link, download_url, seeders")
       .or("media_id.ilike.%-s%,media_id.ilike.%:s%")
+      .gt("id", lastSeenId)
       .order("id", { ascending: true })
-      .range(offset, offset + batchSize - 1);
+      .limit(batchSize);
 
     if (error) {
-      console.error(`[DB ERROR] Fetch failed at offset ${offset}:`, error.message);
+      console.error(`[DB ERROR] Fetch failed after ID ${lastSeenId}:`, error.message);
       await sleep(2000);
-      offset += batchSize;
       continue;
     }
 
@@ -184,6 +184,8 @@ async function main() {
       console.log("✅ All TV episode records scanned.");
       break;
     }
+
+    lastSeenId = rows[rows.length - 1].id;
 
     const hashToRow = new Map();
     for (const row of rows) {
@@ -241,7 +243,6 @@ async function main() {
     );
 
     batchIndex++;
-    offset += batchSize;
     await sleep(200);
   }
 
