@@ -387,31 +387,44 @@ function seedCount(item) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function extractCandidateCoreTitle(candidate) {
+  let s = String(candidate || "").replace(/[._]/g, " ").trim();
+  const metaRegex = /\b(?:s\d{1,2}|season\s*\d+|\d{1,2}x\d{1,2}|e\d{1,2}|ep\s*\d+|episode\s*\d+|19\d{2}|20\d{2}|480p|720p|1080p|2160p|4k|uhd|bluray|web-?dl|webrip|brrip|hdtv|nf|amzn|dsnp|hbo|complete|repack|dual|hindi|dubbed)\b/i;
+  const match = s.match(metaRegex);
+  if (match && match.index > 0) {
+    s = s.slice(0, match.index);
+  }
+  return s.toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function matchesTargetTitle(candidateTitle, targetTitle) {
   if (!targetTitle) return true;
-  const normT = String(targetTitle || "").toLowerCase().replace(/\./g, "");
-  const normC = String(candidateTitle || "").toLowerCase().replace(/\./g, "");
-  const c = normC.replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
-  const t = normT.replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
-  if (!c || !t) return true;
+  const cleanTarget = String(targetTitle || "").replace(/[\s_-]+s\d{1,2}(?:e\d{1,2})?.*$/i, "").trim();
+  const normT = cleanTarget.toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+  if (!normT) return true;
 
   const STOP_WORDS = new Set([
-    "season", "complete", "series", "hindi", "dual", "audio", "dubbed",
     "the", "and", "a", "an", "of", "in", "to", "for", "with", "all",
-    "episodes", "episode", "part"
+    "season", "complete", "series", "hindi", "dual", "audio", "dubbed", "part"
   ]);
-  const tWords = t.split(/\s+/).filter((w) => w.length > 1 && !STOP_WORDS.has(w));
-  if (!tWords.length) return c.includes(t);
 
-  const cWords = new Set(c.split(/\s+/));
-  if (tWords.length === 1) {
-    const singleWord = tWords[0];
-    return cWords.has(singleWord) || c.includes(singleWord);
+  const tWords = normT.split(/\s+/).filter((w) => w.length > 0 && !STOP_WORDS.has(w));
+  if (tWords.length === 0) return true;
+
+  const cCore = extractCandidateCoreTitle(candidateTitle);
+  const cWords = cCore.split(/\s+/).filter((w) => w.length > 0 && !STOP_WORDS.has(w));
+
+  // 1. Every single target word must be present in the candidate core title
+  for (const tw of tWords) {
+    if (!cWords.includes(tw)) return false;
   }
 
-  for (const w of tWords) {
-    if (!cWords.has(w)) return false;
+  // 2. Candidate must NOT have extra major content words (e.g. Love & Death vs Love Death and Robots)
+  const extraWords = cWords.filter((cw) => !tWords.includes(cw));
+  if (extraWords.length > 0) {
+    return false;
   }
+
   return true;
 }
 
