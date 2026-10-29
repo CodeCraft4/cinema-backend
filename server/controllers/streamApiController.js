@@ -17,37 +17,37 @@ function buildProviderUrls(tmdbId, mediaType, season = 1, episode = 1) {
   const isTv = mediaType === "tv";
   const id = encodeURIComponent(tmdbId);
 
-  // 1. VidLink: Clean, fast, zero Cloudflare captcha, ad-free UI, instant autoplay
-  const vidLinkUrl = isTv
-    ? `https://vidlink.pro/tv/${id}/${season}/${episode}?primaryColor=E50914&autoplay=true`
-    : `https://vidlink.pro/movie/${id}?primaryColor=E50914&autoplay=true`;
-
-  // 2. SmashyStream: High-speed embed player
-  const smashyUrl = isTv
-    ? `https://embed.smashystream.com/playere.php?tmdb=${id}&season=${season}&episode=${episode}`
-    : `https://embed.smashystream.com/playere.php?tmdb=${id}`;
-
-  // 3. 2Embed: Reliable fallback with high uptime
-  const twoEmbedUrl = isTv
-    ? `https://www.2embed.cc/embedtv/${id}&s=${season}&e=${episode}`
-    : `https://www.2embed.cc/embed/${id}`;
-
-  // 4. VidSrc: Global CDN player
-  const vidSrcUrl = isTv
-    ? `https://vidsrc.to/embed/tv/${id}/${season}/${episode}?autoplay=1`
-    : `https://vidsrc.to/embed/movie/${id}?autoplay=1`;
-
-  // 5. MultiEmbed: Comprehensive Indian/Regional coverage
+  // 1. MultiEmbed: Comprehensive Indian/Regional/Global coverage with 10+ mirror hosts (StreamWish, Filelions, etc.)
   const multiEmbedUrl = isTv
     ? `https://multiembed.mov/?video_id=${id}&tmdb=1&autoplay=1&s=${season}&e=${episode}`
     : `https://multiembed.mov/?video_id=${id}&tmdb=1&autoplay=1`;
 
+  // 2. VidSrc: Global CDN player with broad coverage
+  const vidSrcUrl = isTv
+    ? `https://vidsrc.to/embed/tv/${id}/${season}/${episode}?autoplay=1`
+    : `https://vidsrc.to/embed/movie/${id}?autoplay=1`;
+
+  // 3. SmashyStream: High-speed embed player
+  const smashyUrl = isTv
+    ? `https://embed.smashystream.com/playere.php?tmdb=${id}&season=${season}&episode=${episode}`
+    : `https://embed.smashystream.com/playere.php?tmdb=${id}`;
+
+  // 4. VidLink: Clean, fast, zero Cloudflare captcha, ad-free UI, instant autoplay
+  const vidLinkUrl = isTv
+    ? `https://vidlink.pro/tv/${id}/${season}/${episode}?primaryColor=E50914&autoplay=true`
+    : `https://vidlink.pro/movie/${id}?primaryColor=E50914&autoplay=true`;
+
+  // 5. 2Embed: Reliable fallback with high uptime
+  const twoEmbedUrl = isTv
+    ? `https://www.2embed.cc/embedtv/${id}&s=${season}&e=${episode}`
+    : `https://www.2embed.cc/embed/${id}`;
+
   return [
-    { name: "Server 1 (VidLink - Clean HD)", url: vidLinkUrl },
-    { name: "Server 2 (Smashy - Fast)", url: smashyUrl },
-    { name: "Server 3 (2Embed - Stable)", url: twoEmbedUrl },
-    { name: "Server 4 (VidSrc - Global)", url: vidSrcUrl },
-    { name: "Server 5 (MultiCloud)", url: multiEmbedUrl },
+    { name: 'Server 1 (MultiCloud - 99% Hit Rate)', url: multiEmbedUrl },
+    { name: 'Server 2 (VidSrc - Global)', url: vidSrcUrl },
+    { name: 'Server 3 (Smashy - Fast)', url: smashyUrl },
+    { name: 'Server 4 (VidLink - Clean HD)', url: vidLinkUrl },
+    { name: 'Server 5 (2Embed - Stable)', url: twoEmbedUrl },
   ];
 }
 
