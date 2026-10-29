@@ -2,6 +2,7 @@
 
 const { asyncHandler } = require("../utils/http");
 const { streamTorrentToHttp, extractInfoHash, normalizeMagnet } = require("../services/torrentStreamEngine");
+const torboxService = require("../services/torboxService");
 
 /**
  * Controller for GET / HEAD /api/media/stream/torrent...
@@ -41,6 +42,18 @@ const handleTorrentStream = asyncHandler(async (req, res) => {
   }
 
   const isDownload = req.query.download === "1" || req.path.includes("/download/");
+
+  // Offload to TorBox Cloud Cache if available (prevents VPS RAM and CPU saturation)
+  try {
+    const torboxData = await torboxService.resolveDirectTorboxStream(magnet);
+    if (torboxData && (torboxData.streamUrl || torboxData.downloadUrl)) {
+      const targetUrl = isDownload ? (torboxData.downloadUrl || torboxData.streamUrl) : (torboxData.streamUrl || torboxData.downloadUrl);
+      console.log(`[TorrentStream] Offloaded torrent ${infoHash} to high-speed TorBox CDN`);
+      return res.redirect(302, targetUrl);
+    }
+  } catch (tbErr) {
+    console.warn(`[TorrentStream] TorBox direct resolution skipped for ${infoHash}:`, tbErr.message);
+  }
   // Serve torrent media only from this API. Never send native clients to embed players.
   const enableP2P = process.env.ENABLE_P2P_TORRENT !== "false";
   if (!enableP2P && infoHash) {

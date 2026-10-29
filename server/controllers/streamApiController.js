@@ -100,9 +100,9 @@ const getStream = asyncHandler(async (req, res) => {
         const episodeId = `${tmdbId}-${epTag}`; // e.g. 303143-s01e05
         const episodeIdAlt = `${tmdbId}-${epTagAlt}`;
 
-        // Strictly query the EXACT episode first, then season pack, then show-level
+        // Strictly query the EXACT episode first, then season pack, then show-level (strictly scoped to tmdbId)
         dbQuery = dbQuery.or(
-          `media_id.eq.${episodeId},media_id.eq.${episodeIdAlt},media_id.ilike.%${epTag}%,media_id.ilike.%${epTagAlt}%,media_id.ilike.${tmdbId}-s${sPadded}%,media_id.eq.${tmdbId}`
+          `media_id.eq.${episodeId},media_id.eq.${episodeIdAlt},media_id.ilike.${tmdbId}-%${epTag}%,media_id.ilike.${tmdbId}-%${epTagAlt}%,media_id.ilike.${tmdbId}-s${sPadded}%,media_id.eq.${tmdbId}`
         );
       } else {
         dbQuery = dbQuery.eq("media_id", String(tmdbId));

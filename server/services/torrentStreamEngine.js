@@ -60,7 +60,7 @@ try {
 
 // In-memory active torrent engines: infoHash -> engineRecord
 const activeEngines = new Map();
-const IDLE_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes idle teardown
+const IDLE_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes idle teardown (RAM-optimized for 1GB VPS)
 const configuredFirstDataTimeout = Number.parseInt(process.env.TORRENT_FIRST_DATA_TIMEOUT_MS || "", 10);
 const FIRST_DATA_TIMEOUT_MS = Number.isFinite(configuredFirstDataTimeout)
   ? Math.max(15000, Math.min(60000, configuredFirstDataTimeout))
@@ -287,6 +287,15 @@ async function getOrStartEngine(magnetOrHash, { timeoutMs = 35000 } = {}) {
     if (record.idleTimer) clearTimeout(record.idleTimer);
     if (record.status === "ready") return record;
     return record.readyPromise;
+  }
+
+  // Destroy older engines on low-memory VPS (1GB RAM) to prevent OOM saturation
+  if (activeEngines.size >= 1) {
+    for (const [oldHash] of activeEngines.entries()) {
+      if (oldHash !== infoHash) {
+        destroyEngine(oldHash);
+      }
+    }
   }
 
   // 1. Try instant HTTP torrent file cache fetch first
