@@ -8,12 +8,12 @@
  * 2. If stream is missing:
  *    - Finds working Hindi / Dual Audio torrents with live seeders >= 5.
  *    - Strictly enforces 480p, 720p, 1080p ONLY (4K / 2160p is strictly IGNORED).
- *    - Injects stream into `media_sources` so every poster in CineBox plays instantly!
+ *    - Directly upserts stream into `media_sources` so every poster in CineBox plays instantly!
  */
 
 const { getSupabaseClient, MEDIA_CONTENT_TABLE, MEDIA_SOURCES_TABLE } = require("../server/services/supabaseClient");
-const { saveTorrentRelease } = require("../server/services/mediaSourceService");
-const { discoverCascadingTorrents } = require("../server/services/torrentResolver");
+const { buildCacheKey } = require("../server/services/mediaSourceService");
+const { magnetWrite, discoverCascadingTorrents } = require("../server/services/torrentResolver");
 
 const MIN_REQUIRED_SEEDERS = 5;
 
@@ -23,10 +23,10 @@ function sleep(ms) {
 
 function parseCliArgs() {
   const args = process.argv.slice(2);
-  const result = { batchSize: 50, maxTotal: 5000, startOffset: 0 };
+  const result = { batchSize: 50, maxTotal: 35000 };
   for (const a of args) {
     if (a.startsWith("--batch-size=")) result.batchSize = Number(a.split("=")[1]) || 50;
-    if (a.startsWith("--max=")) result.maxTotal = Number(a.split("=")[1]) || 5000;
+    if (a.startsWith("--max=")) result.maxTotal = Number(a.split("=")[1]) || 35000;
   }
   return result;
 }
@@ -133,31 +133,56 @@ async function main() {
           const backdropUrl =
             details.backdrop_url ||
             (details.backdrop_path ? `https://image.tmdb.org/t/p/original${details.backdrop_path}` : "");
+          const cleanQuality = result.quality || "720p";
+          const cleanLanguage = result.language || "Dual Audio [Hindi+Eng]";
+          const written = magnetWrite(magnet);
 
-          await saveTorrentRelease(
-            {
-              mediaId: String(externalId),
+          const sourceRow = {
+            cache_key: buildCacheKey({
+              mediaId: externalId,
               title,
               year,
-              mediaType,
-              posterUrl,
-              backdropUrl,
+              language: cleanLanguage,
+              quality: cleanQuality,
+            }),
+            media_id: String(externalId),
+            media_title: title,
+            year: year || null,
+            language: cleanLanguage,
+            quality: cleanQuality,
+            source_type: written?.source_type || "torrent",
+            download_url: written?.download_url || magnet,
+            stream_url: written?.stream_url || null,
+            magnet_link: magnet,
+            seeders: liveSeeds,
+            size_human: result.size || result.size_human || "1.2 GB",
+            size_bytes: result.size_bytes || null,
+            is_fallback: false,
+            status: "ready",
+            updated_at: new Date().toISOString(),
+            payload: {
+              title,
+              language_label: cleanLanguage,
+              size_human: result.size || result.size_human || null,
+              provider: result.provider || "Torrentio",
+              overview: details.overview || null,
+              poster_url: posterUrl,
+              backdrop_url: backdropUrl,
+              rating: details.vote_average ? Math.round(Number(details.vote_average) * 10) : null,
+              tmdb_id: externalId,
             },
-            {
-              ...result,
-              title: result.title || title,
-              magnet,
-              seeders: liveSeeds,
-              quality: result.quality || "1080p",
-              language: result.language || "Dual Audio [Hindi+Eng]",
-              language_label: result.language_label || "Dual Audio [Hindi+Eng]",
-            }
-          );
+          };
 
-          totalStreamsInjected++;
-          console.log(
-            `  ✨ [STREAM INJECTED] "${title}" · ${result.quality || "720p/1080p"} · ${liveSeeds} seeds · ${result.language || "Hindi"}`
-          );
+          const { error: insertErr } = await supabase.from(MEDIA_SOURCES_TABLE).upsert(sourceRow, { onConflict: "cache_key" });
+
+          if (!insertErr) {
+            totalStreamsInjected++;
+            console.log(
+              `  ✨ [STREAM INJECTED] "${title}" · ${cleanQuality} · ${liveSeeds} seeds · ${cleanLanguage}`
+            );
+          } else {
+            console.error(`  ❌ [DB INSERT ERROR] "${title}":`, insertErr.message);
+          }
         } else {
           totalNoSeeds++;
           if (is4K) {
@@ -191,4 +216,3 @@ main().catch((err) => {
   console.error("Fatal error in syncSourcesForMediaContent:", err);
   process.exit(1);
 });
-

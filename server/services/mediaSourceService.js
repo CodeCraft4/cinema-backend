@@ -890,6 +890,7 @@ async function saveTorrentRelease(params, release) {
     quality: release.quality || params?.quality,
     mediaType: params.mediaType,
     metadata: release.title || params.title,
+    seeders: release.seeders ?? release.seeds ?? 5,
   });
   if (!accepted.ok) return null;
   const size = publicSize({ ...release, ...accepted, magnet_link: magnet });
