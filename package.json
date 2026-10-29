@@ -46,7 +46,8 @@
     "ingest:global": "node scripts/ingestTopGlobalHindiCinema.js",
     "clean:movies": "node scripts/fastCleanMoviesDeadTorrents.js",
     "clean:series": "node scripts/fastCleanSeriesDeadTorrents.js",
-    "complete:franchises": "node scripts/autoIngestMovieFranchises.js"
+    "complete:franchises": "node scripts/autoIngestMovieFranchises.js",
+    "sync:content": "node scripts/syncSourcesForMediaContent.js"
   },
   "build": {
     "appId": "com.cinebroad.app",
