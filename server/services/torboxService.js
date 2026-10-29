@@ -145,7 +145,7 @@ async function getTorrentFiles(torrentId) {
 /**
  * Pick the largest primary media/video file (ignoring samples, txt, nfo).
  */
-function pickPrimaryVideoFile(files) {
+function pickPrimaryVideoFile(files, season = null, episode = null) {
   if (!Array.isArray(files) || files.length === 0) return null;
 
   const videoFiles = files.filter((f) => {
@@ -160,15 +160,41 @@ function pickPrimaryVideoFile(files) {
     return isVideo && !isSample;
   });
 
-  if (videoFiles.length > 0) {
-    // Sort descending by file size
-    videoFiles.sort((a, b) => (b.size || 0) - (a.size || 0));
-    return videoFiles[0];
+  if (videoFiles.length === 0) {
+    const sorted = [...files].sort((a, b) => (b.size || 0) - (a.size || 0));
+    return sorted[0] || null;
   }
 
-  // Fallback to largest file overall
-  const sorted = [...files].sort((a, b) => (b.size || 0) - (a.size || 0));
-  return sorted[0] || null;
+  // If episode is provided (TV show), find matching episode file inside Season Pack
+  if (episode != null) {
+    const epNum = Number(episode);
+    const sNum = season != null ? Number(season) : 1;
+    const sPadded = String(sNum).padStart(2, "0");
+    const ePadded = String(epNum).padStart(2, "0");
+
+    const patterns = [
+      new RegExp(`s0*${sNum}[._ -]*e0*${epNum}\\b`, "i"),
+      new RegExp(`\\b${sNum}x0*${epNum}\\b`, "i"),
+      new RegExp(`\\be0*${epNum}\\b`, "i"),
+      new RegExp(`\\bep[._ -]*0*${epNum}\\b`, "i"),
+      new RegExp(`\\bepisode[._ -]*0*${epNum}\\b`, "i"),
+      new RegExp(`[._ -]0*${epNum}[._ -]`, "i"),
+    ];
+
+    for (const pattern of patterns) {
+      const match = videoFiles.find((f) => {
+        const name = String(f.name || f.short_name || "").toLowerCase();
+        return pattern.test(name);
+      });
+      if (match) {
+        return match;
+      }
+    }
+  }
+
+  // Fallback to largest video file
+  videoFiles.sort((a, b) => (b.size || 0) - (a.size || 0));
+  return videoFiles[0];
 }
 
 /**
@@ -212,15 +238,19 @@ async function requestDownloadLink(torrentId, fileId) {
  * @param {string} magnetLink
  * @returns {Promise<{ success: boolean, streamUrl: string, downloadUrl: string, fileName: string, isCached: boolean } | null>}
  */
-async function resolveDirectTorboxStream(magnetLink) {
+async function resolveDirectTorboxStream(magnetLink, options = {}) {
   const apiKey = getApiKey();
   if (!apiKey || !magnetLink) return null;
 
   const hash = extractInfoHash(magnetLink);
   if (!hash) return null;
 
+  const season = options?.season ?? null;
+  const episode = options?.episode ?? null;
+
   // 1. Check in-memory cache first (2-hour TTL to match link validity)
-  const cacheKey = `torbox:link:${hash}`;
+  const epKey = episode != null ? `:s${season ?? 1}e${episode}` : "";
+  const cacheKey = `torbox:link:${hash}${epKey}`;
   const cached = memoryCache.get(cacheKey);
   if (cached) {
     return { ...cached, fromCache: true };
@@ -233,7 +263,7 @@ async function resolveDirectTorboxStream(magnetLink) {
 
     // 3. Inspect files inside the torrent
     const files = await getTorrentFiles(created.torrent_id);
-    const primaryFile = pickPrimaryVideoFile(files);
+    const primaryFile = pickPrimaryVideoFile(files, season, episode);
     const fileId = primaryFile?.id || (files && files[0]?.id) || null;
 
     // 4. Request direct download URL

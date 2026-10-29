@@ -93,7 +93,17 @@ const getStream = asyncHandler(async (req, res) => {
         .limit(10);
 
       if (isTv) {
-        dbQuery = dbQuery.or(`media_id.eq.${tmdbId},media_id.ilike.${tmdbId}-s%`);
+        const sPadded = String(season).padStart(2, "0");
+        const ePadded = String(episode).padStart(2, "0");
+        const epTag = `s${sPadded}e${ePadded}`; // e.g. s01e05
+        const epTagAlt = `s${season}e${episode}`; // e.g. s1e5
+        const episodeId = `${tmdbId}-${epTag}`; // e.g. 303143-s01e05
+        const episodeIdAlt = `${tmdbId}-${epTagAlt}`;
+
+        // Strictly query the EXACT episode first, then season pack, then show-level
+        dbQuery = dbQuery.or(
+          `media_id.eq.${episodeId},media_id.eq.${episodeIdAlt},media_id.ilike.%${epTag}%,media_id.ilike.%${epTagAlt}%,media_id.ilike.${tmdbId}-s${sPadded}%,media_id.eq.${tmdbId}`
+        );
       } else {
         dbQuery = dbQuery.eq("media_id", String(tmdbId));
       }
@@ -132,10 +142,35 @@ const getStream = asyncHandler(async (req, res) => {
           );
         };
 
-        // Priority 1: Match genuine Hindi or Dual Audio source
+        // If TV show, match the SPECIFIC requested episode row first!
+        let tvMatchingEpisode = null;
+        if (isTv) {
+          const sPadded = String(season).padStart(2, "0");
+          const ePadded = String(episode).padStart(2, "0");
+          const epTag = `s${sPadded}e${ePadded}`;
+          const episodeId = `${tmdbId}-${epTag}`;
+
+          tvMatchingEpisode =
+            sources.find((s) => {
+              const mid = String(s.media_id || "").toLowerCase();
+              const mtitle = String(s.media_title || "").toLowerCase();
+              const mmagnet = String(s.magnet_link || s.download_url || "").toLowerCase();
+              const isMatch = mid === episodeId || mtitle.includes(epTag) || mmagnet.includes(epTag);
+              return isMatch && isGenuineHindiOrDual(s);
+            }) ||
+            sources.find((s) => {
+              const mid = String(s.media_id || "").toLowerCase();
+              const mtitle = String(s.media_title || "").toLowerCase();
+              const mmagnet = String(s.magnet_link || s.download_url || "").toLowerCase();
+              return mid === episodeId || mtitle.includes(epTag) || mmagnet.includes(epTag);
+            });
+        }
+
+        // Priority 1: Exact TV Episode match
+        // Priority 2: Quality match
+        // Priority 3: Hindi or Dual Audio source
         const hindiOrDual = sources.find(isGenuineHindiOrDual);
 
-        // Priority 1.5: If user specifically requested 720p or 480p, pick matching source
         let matchingQuality = null;
         if (quality !== "auto") {
           matchingQuality = sources.find((s) => {
@@ -145,12 +180,13 @@ const getStream = asyncHandler(async (req, res) => {
         }
 
         let activeSource = null;
-        if (matchingQuality) {
+        if (tvMatchingEpisode) {
+          activeSource = tvMatchingEpisode;
+        } else if (matchingQuality) {
           activeSource = matchingQuality;
         } else if (hindiOrDual) {
           activeSource = hindiOrDual;
         } else if (audio !== "hi") {
-          // Only pick English/original sources if the user did not specifically request Hindi
           activeSource = sources.find((s) => s.stream_url) || sources[0];
         }
 
@@ -175,7 +211,7 @@ const getStream = asyncHandler(async (req, res) => {
   let torboxData = null;
   if (torrentMagnet) {
     try {
-      torboxData = await torboxService.resolveDirectTorboxStream(torrentMagnet);
+      torboxData = await torboxService.resolveDirectTorboxStream(torrentMagnet, { season, episode });
       if (torboxData && torboxData.streamUrl) {
         directStreamUrl = torboxData.streamUrl;
         directDownloadUrl = torboxData.downloadUrl;
