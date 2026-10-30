@@ -658,33 +658,33 @@ function buildEmbedUrl(provider, { imdbId, tmdbId, mediaType, season, episode } 
   if (name === "vidlink") {
     if (isTv && seasonNum > 0) {
       const ep = Number.isInteger(episodeNum) && episodeNum > 0 ? episodeNum : 1;
-      return `https://vidlink.pro/tv/${encodeURIComponent(tmdb || id)}/${seasonNum}/${ep}`;
+      return `https://vidlink.pro/tv/${encodeURIComponent(tmdb || id)}/${seasonNum}/${ep}?audio=hi&lang=hi`;
     }
-    return `https://vidlink.pro/movie/${encodeURIComponent(tmdb || id)}`;
+    return `https://vidlink.pro/movie/${encodeURIComponent(tmdb || id)}?audio=hi&lang=hi`;
   }
   if (name === "autoembed") {
     if (isTv && seasonNum > 0) {
       const ep = Number.isInteger(episodeNum) && episodeNum > 0 ? episodeNum : 1;
-      return `https://player.autoembed.cc/embed/tv/${encodeURIComponent(tmdb || id)}/${seasonNum}/${ep}`;
+      return `https://player.autoembed.cc/embed/tv/${encodeURIComponent(tmdb || id)}/${seasonNum}/${ep}?audio=hi&lang=hi`;
     }
-    return `https://player.autoembed.cc/embed/movie/${encodeURIComponent(tmdb || id)}`;
+    return `https://player.autoembed.cc/embed/movie/${encodeURIComponent(tmdb || id)}?audio=hi&lang=hi`;
   }
   if (name === "vidsrc") {
     if (isTv && seasonNum > 0) {
       const ep = Number.isInteger(episodeNum) && episodeNum > 0 ? `/${episodeNum}` : "";
-      return `https://vidsrc.to/embed/tv/${encodeURIComponent(id)}/${seasonNum}${ep}`;
+      return `https://vidsrc.to/embed/tv/${encodeURIComponent(id)}/${seasonNum}${ep}?audio=hi&lang=hi`;
     }
-    return `https://vidsrc.to/embed/movie/${encodeURIComponent(id)}`;
+    return `https://vidsrc.to/embed/movie/${encodeURIComponent(id)}?audio=hi&lang=hi`;
   }
   if (name === "2embed") {
     if (isTv && tmdb && seasonNum > 0) {
       const ep = Number.isInteger(episodeNum) && episodeNum > 0 ? episodeNum : 1;
-      return `https://www.2embed.cc/embed/tmdb/tv?id=${encodeURIComponent(tmdb)}&s=${seasonNum}&e=${ep}`;
+      return `https://www.2embed.cc/embed/tmdb/tv?id=${encodeURIComponent(tmdb)}&s=${seasonNum}&e=${ep}&audio=hi`;
     }
-    return `https://www.2embed.cc/embed/${encodeURIComponent(id)}`;
+    return `https://www.2embed.cc/embed/${encodeURIComponent(id)}?audio=hi`;
   }
   if (name === "multiembed") {
-    return `https://multiembed.mov/?video_id=${encodeURIComponent(id)}&tmdb=${imdb ? 0 : 1}`;
+    return `https://multiembed.mov/?video_id=${encodeURIComponent(id)}&tmdb=${imdb ? 0 : 1}&audio=hindi`;
   }
   return "";
 }
