@@ -152,7 +152,13 @@ function findEpisodeFile(files = [], ep, season = null) {
     if (!marker || marker.episode !== epNum) return false;
     return seasonNum == null || marker.season == null || marker.season === seasonNum;
   });
-  return matches.length === 1 ? matches[0] : null;
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    const nonSample = matches.filter((f) => !String(f.name || f.path || "").toLowerCase().includes("sample"));
+    const pool = nonSample.length ? nonSample : matches;
+    return [...pool].sort((a, b) => (b.length || b.size || 0) - (a.length || a.size || 0))[0] || null;
+  }
+  return null;
 }
 
 function getSwarmStats(record) {
@@ -529,9 +535,9 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
   }
 
   const files = record.engine?.files || [];
-  const requestedEpisode = req.query.episode ?? req.query.ep;
-  const requestedSeason = req.query.season ?? req.query.s;
-  const fileIndexProvided = req.query.fileIndex != null;
+  const requestedEpisode = options?.episode ?? req.query.episode ?? req.query.ep;
+  const requestedSeason = options?.season ?? req.query.season ?? req.query.s;
+  const fileIndexProvided = options?.fileIndex != null || req.query.fileIndex != null || req.query.fileIdx != null;
   let targetFile = null;
 
   if (requestedEpisode != null) {
@@ -572,7 +578,7 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
       });
     }
   } else if (fileIndexProvided) {
-    const fileIndex = Number(req.query.fileIndex);
+    const fileIndex = Number(options?.fileIndex ?? req.query.fileIndex ?? req.query.fileIdx);
     const candidate = Number.isInteger(fileIndex) && fileIndex >= 0 ? files[fileIndex] : null;
     if (!candidate || !isCleanVideo(candidate.name || candidate.path)) {
       scheduleIdleCleanup(record.infoHash);

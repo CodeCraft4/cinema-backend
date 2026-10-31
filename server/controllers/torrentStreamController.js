@@ -42,13 +42,22 @@ const handleTorrentStream = asyncHandler(async (req, res) => {
   }
 
   const isDownload = req.query.download === "1" || req.path.includes("/download/");
+  const episode = req.query.ep ?? req.query.episode ?? null;
+  const season = req.query.s ?? req.query.season ?? null;
+  const fileIndex = req.query.fileIndex ?? req.query.fileIdx ?? null;
+  const fileName = req.query.fileName ?? req.query.filename ?? req.query.file ?? null;
 
   // Offload to TorBox Cloud Cache if available (prevents VPS RAM and CPU saturation)
   try {
-    const torboxData = await torboxService.resolveDirectTorboxStream(magnet);
+    const torboxData = await torboxService.resolveDirectTorboxStream(magnet, {
+      season: season != null && season !== "" ? Number(season) : null,
+      episode: episode != null && episode !== "" ? Number(episode) : null,
+      fileIndex: fileIndex != null && fileIndex !== "" ? Number(fileIndex) : null,
+      fileName: fileName || null,
+    });
     if (torboxData && (torboxData.streamUrl || torboxData.downloadUrl)) {
       const targetUrl = isDownload ? (torboxData.downloadUrl || torboxData.streamUrl) : (torboxData.streamUrl || torboxData.downloadUrl);
-      console.log(`[TorrentStream] Offloaded torrent ${infoHash} to high-speed TorBox CDN`);
+      console.log(`[TorrentStream] Offloaded torrent ${infoHash} (S${season || 1}E${episode || "?"}) to high-speed TorBox CDN`);
       return res.redirect(302, targetUrl);
     }
   } catch (tbErr) {
@@ -70,6 +79,9 @@ const handleTorrentStream = asyncHandler(async (req, res) => {
     magnet,
     infoHash,
     isDownload,
+    episode: episode != null && episode !== "" ? Number(episode) : null,
+    season: season != null && season !== "" ? Number(season) : null,
+    fileIndex: fileIndex != null && fileIndex !== "" ? Number(fileIndex) : null,
   });
 });
 

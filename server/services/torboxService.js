@@ -149,6 +149,13 @@ async function getTorrentFiles(torrentId) {
 function pickPrimaryVideoFile(files, season = null, episode = null, options = {}) {
   if (!Array.isArray(files) || files.length === 0) return null;
 
+  if (options && options.fileIndex != null) {
+    const idx = Number(options.fileIndex);
+    if (Number.isInteger(idx) && idx >= 0 && idx < files.length) {
+      return files[idx];
+    }
+  }
+
   const videoFiles = files.filter((f) => {
     const name = String(f.name || f.short_name || "").toLowerCase();
     const isVideo =
@@ -188,6 +195,7 @@ function pickPrimaryVideoFile(files, season = null, episode = null, options = {}
       new RegExp(`\\b${sNum}x0*${epNum}(?!\\d)`, "i"),
       new RegExp(`\\bep(?:isode)?[._ -]*0*${epNum}(?!\\d)`, "i"),
       new RegExp(`\\be0*${epNum}(?!\\d)`, "i"),
+      new RegExp(`(?:^|[\\s._\\-\\[\\(])(?:ep|episode|e)?0*${epNum}(?:[\\s._\\-\\]\\)]|$)`, "i"),
       new RegExp(`(?:^|/)0*${epNum}(?!\\d)[^/]*$`, "i"),
     ];
     const untagged = videoFiles.filter((f) => episodeScope(fileName(f), sNum, epNum) === "pack");
@@ -266,12 +274,14 @@ async function resolveDirectTorboxStream(magnetLink, options = {}) {
 
   const season = options?.season ?? null;
   const episode = options?.episode ?? null;
+  const fileIndex = options?.fileIndex ?? options?.fileIdx ?? null;
 
   // 1. Check in-memory cache first (2-hour TTL to match link validity)
   const epKey = episode != null ? `:s${season ?? 1}e${episode}` : "";
+  const fileIdxKey = fileIndex != null ? `:idx${fileIndex}` : "";
   // Films of one pack share a hash, so the file name is part of the key.
   const fileKey = options?.fileName ? `:f:${baseName(options.fileName)}` : "";
-  const cacheKey = `torbox:link:${hash}${epKey}${fileKey}`;
+  const cacheKey = `torbox:link:${hash}${epKey}${fileIdxKey}${fileKey}`;
   const cached = memoryCache.get(cacheKey);
   if (cached) {
     return { ...cached, fromCache: true };
@@ -288,6 +298,7 @@ async function resolveDirectTorboxStream(magnetLink, options = {}) {
     const primaryFile = pickPrimaryVideoFile(files, season, episode, {
       singleEpisode: options?.singleEpisode,
       fileName: options?.fileName,
+      fileIndex,
     });
     if (!primaryFile || primaryFile.id == null) {
       if (episode != null) console.warn(`[TorboxService] S${season}E${episode} not found in torrent ${created.torrent_id}`);
