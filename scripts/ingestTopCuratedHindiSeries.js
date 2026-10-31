@@ -51,6 +51,29 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
 });
 
+// In-memory set of existing episode media IDs in Supabase to guarantee ZERO duplicates
+const existingEpisodeMediaIds = new Set();
+
+async function prewarmExistingEpisodeIds() {
+  console.log("🔍 Checking existing media in Supabase to prevent duplicates...");
+  let from = 0;
+  const batchSize = 1000;
+  while (true) {
+    const { data, error } = await supabase
+      .from("media_sources")
+      .select("media_id")
+      .like("media_id", "%-s%e%")
+      .range(from, from + batchSize - 1);
+    if (error || !data || data.length === 0) break;
+    data.forEach((r) => {
+      if (r.media_id) existingEpisodeMediaIds.add(String(r.media_id).trim());
+    });
+    from += batchSize;
+    if (data.length < batchSize) break;
+  }
+  console.log(`✅ Loaded ${existingEpisodeMediaIds.size} existing episodes from Supabase. Any duplicates will be strictly SKIPPED!\n`);
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -193,6 +216,11 @@ async function ingestShowWithHindiOnly(showQuery, industryTag = "") {
       const epTitle = `${showTitle} - S${sPad}E${ePad}`;
       const epName = ep.name || `Episode ${epNum}`;
 
+      // STRICT ZERO DUPLICATES: If episode already exists in Supabase, skip immediately!
+      if (existingEpisodeMediaIds.has(epMediaId)) {
+        continue;
+      }
+
       // Check streams on Torrentio
       const rawStreams = await fetchTorrentioEpisodeStreams(imdbId, sNum, epNum);
       const validHindi = rawStreams
@@ -263,6 +291,7 @@ async function ingestShowWithHindiOnly(showQuery, industryTag = "") {
 
       const { error } = await supabase.from("media_sources").upsert(sourceRow, { onConflict: "cache_key" });
       if (!error) {
+        existingEpisodeMediaIds.add(epMediaId);
         totalSaved++;
         console.log(`     ✅ S${sPad}E${ePad}: "${epName}" (${best.quality}, ${best.seeders} seeds, ${best.language})`);
       }
@@ -329,7 +358,10 @@ async function runMasterSeriesIngest() {
   console.log("   Criteria: Strictly Pure Hindi, Dual Audio [Hindi+Eng], Original+Hindi");
   console.log("   Seeds: >= 3 Active Seeds (Zero dead torrents)");
   console.log("   Full Seasons & Episodes with 1080p / 720p Direct Streams");
+  console.log("   Duplicates: STRICT ZERO DUPLICATES (Existing episodes skipped)");
   console.log("================================================================================\n");
+
+  await prewarmExistingEpisodeIds();
 
   // 1. Hollywood Top 50
   console.log("\n=======================================================");
