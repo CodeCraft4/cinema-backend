@@ -200,8 +200,19 @@ async function ingestShowWithHindiOnly(showQuery, industryTag = "") {
         .filter((s) => {
           if (s.quality === "2160p") return false; // Skip 4K
           if (s.seeders < MIN_ACTIVE_SEEDS) return false; // STRICTLY NO DEAD SEEDS!
-          if (isNativeHindi) return true; // Native Hindi show torrents are always Hindi
-          return /\bhindi\b/i.test(s.releaseName) || /\bhindi\b/i.test(s.subName) || /\bdual\b/i.test(s.releaseName);
+          
+          // Strict Hindi verification: Must explicitly match Hindi or Dual Audio [Hindi+Eng]
+          const combined = `${s.releaseName} ${s.subName}`.toLowerCase();
+          const hasHindiMarker = /\bhindi\b/i.test(combined) || /\bdual\b/i.test(combined);
+          
+          if (isNativeHindi) {
+            // For native Indian shows, accept if it has Hindi marker OR is the native release (excluding foreign dubs like French/German)
+            const isForeignDub = /\b(french|german|spanish|italian|russian|polish)\b/i.test(combined);
+            return !isForeignDub;
+          }
+          
+          // For all foreign series (Korean, Hollywood, Turkish, etc.): STRICTLY REQUIRE HINDI OR DUAL AUDIO!
+          return hasHindiMarker;
         })
         .sort((a, b) => b.seeders - a.seeders);
 
@@ -365,3 +376,4 @@ async function runMasterSeriesIngest() {
 }
 
 runMasterSeriesIngest().catch(console.error);
+
