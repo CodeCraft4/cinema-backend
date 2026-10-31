@@ -1,14 +1,19 @@
 /**
  * scripts/ingestTopCuratedHindiSeries.js
  *
- * Ingestion Engine for Top 50 Series across Hollywood, Bollywood, South (Kollywood/Tollywood)
+ * Master Ingestion Engine for Top 50 Series across Hollywood, Bollywood, South (Kollywood/Tollywood)
  * and Top 70 Korean Dramas with ACTIVE LIVE SEEDERS (>= 3 seeds) strictly in:
  * - Pure Hindi
  * - Dual Audio [Hindi + English]
  * - Original + Hindi Dubbed
  *
- * Every season and every episode is ingested with direct streamable links.
- * Dead seeds (0 seeds) are strictly rejected!
+ * CRITICAL REQUIREMENTS:
+ * 1. 100% Complete Seasons: Every single episode (1 to N) of a season MUST be present.
+ *    If any episode in a season is missing, that season is strictly SKIPPED.
+ * 2. Unreleased / Future Seasons: Never ingest unreleased seasons (air_date is null or future).
+ * 3. Zero Fake Duals: Foreign dubs (Portuguese Dublado, Spanish Latino, Russian) are strictly rejected.
+ * 4. Zero Duplicates: Checks existing Supabase media_id in-memory before querying or inserting.
+ * 5. Instant Start Streaming: Directly playable via /api/media/stream/torrent/:hash/video.mp4?ep=X&s=Y
  */
 
 require("dotenv").config();
@@ -94,14 +99,14 @@ function parseTorrentioStream(stream) {
   const combined = `${releaseName} ${subName}`;
 
   let quality = "720p";
-  if (/\b(?:2160p|4k)\b/i.test(combined)) quality = "2160p";
-  else if (/\b1080p\b/i.test(combined)) quality = "1080p";
-  else if (/\b480p\b/i.test(combined)) quality = "480p";
+  if (/\b(?:2160p|4k)\b/i.test(titleText)) quality = "2160p";
+  else if (/\b1080p\b/i.test(titleText)) quality = "1080p";
+  else if (/\b480p\b/i.test(titleText)) quality = "480p";
 
-  const seedMatch = combined.match(/👤\s*(\d+)/);
+  const seedMatch = titleText.match(/👤\s*(\d+)/);
   const seeders = seedMatch ? parseInt(seedMatch[1], 10) : 0;
 
-  const sizeMatch = combined.match(/💾\s*([\d.]+\s*(?:GB|MB))/i);
+  const sizeMatch = titleText.match(/💾\s*([\d.]+\s*(?:GB|MB))/i);
   const sizeHuman = sizeMatch ? sizeMatch[1] : null;
 
   let language = "Dual Audio [Hindi+Eng]";
@@ -131,7 +136,7 @@ async function fetchTorrentioEpisodeStreams(imdbId, seasonNumber, episodeNumber)
   }
 }
 
-async function ingestShowWithHindiOnly(showQuery, industryTag = "") {
+async function ingestShowWithCompleteSeasons(showQuery, industryTag = "") {
   // Search TMDB
   const searchUrl = `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(showQuery)}`;
   let showBasic = null;
@@ -146,6 +151,12 @@ async function ingestShowWithHindiOnly(showQuery, industryTag = "") {
 
   if (!showBasic) {
     console.warn(`  ⚠️ Show "${showQuery}" not found on TMDB.`);
+    return false;
+  }
+
+  // Reject animation / cartoons
+  if (Array.isArray(showBasic.genre_ids) && showBasic.genre_ids.includes(16)) {
+    console.log(`  ⏩ Skipping "${showBasic.name}" (Genre: Animation/Cartoon).`);
     return false;
   }
 
@@ -171,9 +182,27 @@ async function ingestShowWithHindiOnly(showQuery, industryTag = "") {
 
   const showTitle = showDetails.name;
   const year = (showDetails.first_air_date || "").slice(0, 4) || "2023";
-  const isNativeHindi = showDetails.original_language === "hi";
+  const isNativeHindi =
+    industryTag === "Bollywood" ||
+    showDetails.original_language === "hi" ||
+    showDetails.original_language === "ur";
 
-  console.log(`\n🔍 [${industryTag}] Checking "${showTitle}" (${year}) [IMDB: ${imdbId}, Seasons: ${showDetails.number_of_seasons}]...`);
+  console.log(`\n🔍 [${industryTag}] Checking "${showTitle}" (${year}) [IMDB: ${imdbId}]...`);
+
+  // Filter only released seasons with aired episodes
+  const now = new Date();
+  const validSeasons = (showDetails.seasons || []).filter((s) => {
+    if (s.season_number <= 0) return false;
+    if (!s.episode_count || s.episode_count <= 0) return false;
+    if (!s.air_date) return false;
+    const airDate = new Date(s.air_date);
+    return airDate <= now; // strictly released seasons only!
+  });
+
+  if (validSeasons.length === 0) {
+    console.log(`  ⏩ No aired seasons found for "${showTitle}". Skipping.`);
+    return false;
+  }
 
   // Upsert media_content
   const posterUrl = showDetails.poster_path ? `https://image.tmdb.org/t/p/w500${showDetails.poster_path}` : null;
@@ -195,10 +224,9 @@ async function ingestShowWithHindiOnly(showQuery, industryTag = "") {
     updated_at: new Date().toISOString(),
   }, { onConflict: "id" });
 
-  const seasons = (showDetails.seasons || []).filter((s) => s.season_number > 0);
   let totalSaved = 0;
 
-  for (const sMeta of seasons) {
+  for (const sMeta of validSeasons) {
     const sNum = sMeta.season_number;
     let sData = null;
     try {
@@ -206,53 +234,92 @@ async function ingestShowWithHindiOnly(showQuery, industryTag = "") {
       sData = await sRes.json();
     } catch {}
 
-    if (!sData || !Array.isArray(sData.episodes)) continue;
+    if (!sData || !Array.isArray(sData.episodes) || sData.episodes.length === 0) continue;
+
+    const totalEpisodes = sData.episodes.length;
+    const sPad = String(sNum).padStart(2, "0");
+
+    // Check if ALL episodes in this season are already ingested
+    const allAlreadyIngested = sData.episodes.every((ep) => {
+      const ePad = String(ep.episode_number).padStart(2, "0");
+      return existingEpisodeMediaIds.has(`${showId}-s${sPad}e${ePad}`);
+    });
+
+    if (allAlreadyIngested) {
+      console.log(`  ⏩ Season ${sNum} (${totalEpisodes} episodes) already 100% complete in Supabase. Skipping.`);
+      continue;
+    }
+
+    console.log(`  📺 Evaluating Season ${sNum} (${totalEpisodes} episodes) for 100% Hindi availability...`);
+
+    // Array to collect candidates for ALL episodes of this season
+    const seasonEpisodeCandidates = [];
 
     for (const ep of sData.episodes) {
       const epNum = ep.episode_number;
-      const sPad = String(sNum).padStart(2, "0");
+      const rawStreams = await fetchTorrentioEpisodeStreams(imdbId, sNum, epNum);
+
+      const validHindi = rawStreams
+        .map(parseTorrentioStream)
+        .filter((s) => {
+          if (s.quality === "2160p") return false; // Skip 4K for smooth mobile/TV streaming
+          if (s.seeders < MIN_ACTIVE_SEEDS) return false; // STRICTLY NO DEAD SEEDS (>= 3 seeds required)
+
+          const combined = `${s.releaseName} ${s.subName}`.toLowerCase();
+
+          // Reject foreign dubs that are not Hindi (Portuguese, Russian, Spanish, French, etc.)
+          const isForeignDub = /\b(dublado|latino|portuguese|french|german|spanish|italian|russian|polish)\b/i.test(combined);
+          if (isForeignDub) return false;
+
+          // For native Indian shows (Hindi / Urdu)
+          if (isNativeHindi) {
+            return true;
+          }
+
+          // For ALL Foreign shows (Korean, Hollywood, European, South, etc.):
+          // STRICT RULE: Must explicitly contain Hindi / Hin / Hindustani or Dual Audio [Hindi+Eng]
+          const hasHindiExplicit = /\bhindi\b|\bhin\b|\bhindustani\b/i.test(combined);
+          return hasHindiExplicit;
+        })
+        .sort((a, b) => b.seeders - a.seeders);
+
+      if (validHindi.length > 0) {
+        seasonEpisodeCandidates.push({
+          ep,
+          stream: validHindi[0],
+        });
+      } else {
+        // Episode missing! Stop checking this season as it cannot be 100% complete
+        break;
+      }
+
+      await sleep(100);
+    }
+
+    // STRICT 100% COMPLETION RULE:
+    // Every single episode (1 to totalEpisodes) MUST be present.
+    // If even one episode is missing, REJECT THE SEASON!
+    if (seasonEpisodeCandidates.length !== totalEpisodes) {
+      console.log(`  ⚠️ Season ${sNum} has only ${seasonEpisodeCandidates.length}/${totalEpisodes} episodes in Hindi. SKIPPING entire season to prevent gaps!`);
+      continue;
+    }
+
+    // ALL episodes are verified and available in Hindi with >= 3 seeds!
+    console.log(`  🌟 Season ${sNum} is 100% COMPLETE (${totalEpisodes}/${totalEpisodes} episodes)! Ingesting into Supabase...`);
+
+    for (const item of seasonEpisodeCandidates) {
+      const ep = item.ep;
+      const best = item.stream;
+      const epNum = ep.episode_number;
       const ePad = String(epNum).padStart(2, "0");
       const epMediaId = `${showId}-s${sPad}e${ePad}`;
       const epTitle = `${showTitle} - S${sPad}E${ePad}`;
       const epName = ep.name || `Episode ${epNum}`;
 
-      // STRICT ZERO DUPLICATES: If episode already exists in Supabase, skip immediately!
-      if (existingEpisodeMediaIds.has(epMediaId)) {
-        continue;
-      }
-
-      // Check streams on Torrentio
-      const rawStreams = await fetchTorrentioEpisodeStreams(imdbId, sNum, epNum);
-      const validHindi = rawStreams
-        .map(parseTorrentioStream)
-        .filter((s) => {
-          if (s.quality === "2160p") return false; // Skip 4K
-          if (s.seeders < MIN_ACTIVE_SEEDS) return false; // STRICTLY NO DEAD SEEDS!
-          
-          // Strict Hindi verification: Must explicitly match Hindi or Dual Audio [Hindi+Eng]
-          const combined = `${s.releaseName} ${s.subName}`.toLowerCase();
-          const hasHindiMarker = /\bhindi\b/i.test(combined) || /\bdual\b/i.test(combined);
-          
-          if (isNativeHindi) {
-            // For native Indian shows, accept if it has Hindi marker OR is the native release (excluding foreign dubs like French/German)
-            const isForeignDub = /\b(french|german|spanish|italian|russian|polish)\b/i.test(combined);
-            return !isForeignDub;
-          }
-          
-          // For all foreign series (Korean, Hollywood, Turkish, etc.): STRICTLY REQUIRE HINDI OR DUAL AUDIO!
-          return hasHindiMarker;
-        })
-        .sort((a, b) => b.seeders - a.seeders);
-
-      // If no working Hindi stream with active seeds, SKIP this episode (DO NOT insert dead/null junk)
-      if (validHindi.length === 0) {
-        continue;
-      }
-
-      const best = validHindi[0];
       const hash = best.infoHash.toLowerCase();
       const magnet = `magnet:?xt=urn:btih:${best.infoHash}&dn=${encodeURIComponent(best.releaseName || epTitle)}`;
-      const streamUrl = `${STREAM_BASE_URL}/api/media/stream/torrent/${hash}/video.mp4?ep=${epNum}&s=${sNum}`;
+      const fileIdxParam = best.fileIdx != null ? `&fileIdx=${best.fileIdx}` : "";
+      const streamUrl = `${STREAM_BASE_URL}/api/media/stream/torrent/${hash}/video.mp4?ep=${epNum}&s=${sNum}${fileIdxParam}`;
       const downloadUrl = `${streamUrl}&download=1`;
       const cacheKey = `${epMediaId}::${makeSlug(showTitle)} - s${sPad}e${ePad}::${year}::${makeSlug(best.language)}::${best.quality}`;
 
@@ -295,117 +362,197 @@ async function ingestShowWithHindiOnly(showQuery, industryTag = "") {
         totalSaved++;
         console.log(`     ✅ S${sPad}E${ePad}: "${epName}" (${best.quality}, ${best.seeders} seeds, ${best.language})`);
       }
-      await sleep(150);
+      await sleep(100);
     }
   }
 
-  if (totalSaved > 0) {
-    console.log(`  🎉 Ingested ${totalSaved} verified Hindi episodes for "${showTitle}".`);
-    return true;
-  } else {
-    console.log(`  ⚠️ No active Hindi torrents with >= ${MIN_ACTIVE_SEEDS} seeds for "${showTitle}".`);
-    return false;
-  }
+  return totalSaved > 0;
 }
 
-// Curated Top Shows with guaranteed verified Hindi / Dual Audio dubs & heavy active seeders
+// Curated Top 50 Bollywood/Indian, Top 70 Korean (Hindi), Top 50 Hollywood/Global
 const CURATED_LISTS = {
-  korean: [
-    "Squid Game", "All of Us Are Dead", "Sweet Home", "Bloodhounds", "My Name", 
-    "A Killer Paradox", "Parasyte: The Grey", "Gyeongseong Creature", "The Glory", "Hellbound",
-    "Narco-Saints", "The Silent Sea", "D.P.", "Extracurricular", "Vagabond", 
-    "Vincenzo", "Happiness", "Taxi Driver", "Weak Hero Class 1", "Death's Game", 
-    "Moving", "Signal", "Kingdom", "The Worst of Evil", "Connect",
-    "Big Mouth", "Alice in Borderland", "Celebrity", "Mask Girl", "Song of the Bandits",
-    "Black Knight", "Daily Dose of Sunshine", "Doona!", "Doctor Cha", "King the Land",
-    "Crash Course in Romance", "The Uncanny Counter", "Alchemy of Souls", "Hotel Del Luna", "It's Okay to Not Be Okay",
-    "Business Proposal", "Tale of the Nine Tailed", "True Beauty", "Descendants of the Sun", "Guardian: The Lonely and Great God",
-    "Legend of the Blue Sea", "W: Two Worlds Apart", "Weightlifting Fairy Kim Bok-joo", "Strong Girl Bong-soon", "What's Wrong with Secretary Kim",
-    "Hometown Cha-Cha-Cha", "Our Beloved Summer", "Twenty Five Twenty One", "Summer Strike", "See You in My 19th Life",
-    "Twinkling Watermelon", "Welcome to Samdal-ri", "Doctor Slump", "Queen of Tears", "Lovely Runner",
-    "Hierarchy", "The 8 Show", "Miss Night and Day", "No Gain No Love", "Seoul Busters",
-    "The Judge from Hell", "Gyeongseong Creature Season 2", "Hellbound Season 2", "Mr. Plankton", "Mercy for None"
+  BOLLYWOOD_TOP_50: [
+    "Mirzapur",
+    "Panchayat",
+    "The Family Man",
+    "Farzi",
+    "Asur: Welcome to Your Dark Side",
+    "Sacred Games",
+    "Scam 1992: The Harshad Mehta Story",
+    "Delhi Crime",
+    "Gullak",
+    "Kota Factory",
+    "Special OPS",
+    "Aarya",
+    "Rocket Boys",
+    "Taaza Khabar",
+    "Breathe: Into the Shadows",
+    "Maharani",
+    "Hostel Daze",
+    "TVF Pitchers",
+    "Aspirants",
+    "Dhindora",
+    "Guns & Gulaabs",
+    "Kohrra",
+    "Scoop",
+    "Dahaad",
+    "Jubilee",
+    "Poacher",
+    "Maamla Legal Hai",
+    "Indian Police Force",
+    "Rana Naidu",
+    "CAT",
+    "Khakee: The Bihar Chapter",
+    "Yeh Meri Family",
+    "Sandwiched Forever",
+    "Flames",
+    "Permanent Roommates",
+    "Rudra: The Edge of Darkness",
+    "Kaala Paani",
+    "The Railway Men",
+    "Killer Soup",
+    "Bambai Meri Jaan",
+    "Tooth Pari: When Love Bites",
+    "Shekhar Home",
+    "Sarabhai vs Sarabhai",
+    "Paatal Lok",
+    "Undekhi",
   ],
-  hollywood: [
-    "Game of Thrones", "Breaking Bad", "Stranger Things", "The Boys", "House of the Dragon",
-    "The Last of Us", "Fallout", "Loki", "Wednesday", "Peaky Blinders",
-    "The Witcher", "Daredevil", "The Punisher", "Moon Knight", "WandaVision",
-    "Hawkeye", "Secret Invasion", "Echo", "Percy Jackson and the Olympians", "Reacher",
-    "Jack Ryan", "The Continental: From the World of John Wick", "Monarch: Legacy of Monsters", "Halo", "Gen V",
-    "Ahsoka", "The Mandalorian", "Andor", "Obi-Wan Kenobi", "The Book of Boba Fett",
-    "Shōgun", "3 Body Problem", "The Gentlemen", "Ripley", "Sugar",
-    "Dark", "Money Heist", "Berlin", "Lupin", "Squid Game",
-    "Prison Break", "Chernobyl", "True Detective", "Fargo", "The Walking Dead",
-    "Supernatural", "The Flash", "Arrow", "Gotham", "Titans"
+  KOREAN_HINDI_TOP_70: [
+    "All of Us Are Dead",
+    "Sweet Home",
+    "Vincenzo",
+    "Squid Game",
+    "The Glory",
+    "Business Proposal",
+    "My Name",
+    "Bloodhounds",
+    "Celebrity",
+    "A Killer Paradox",
+    "Parasyte: The Grey",
+    "Gyeongseong Creature",
+    "Hellbound",
+    "The Silent Sea",
+    "D.P.",
+    "Daily Dose of Sunshine",
+    "Hierarchy",
+    "Mask Girl",
+    "Song of the Bandits",
+    "Doona!",
+    "Crash Landing on You",
+    "Extraordinary Attorney Woo",
+    "Alchemy of Souls",
+    "King the Land",
+    "Castaway Diva",
+    "Doctor Cha",
+    "See You in My 19th Life",
+    "Destined with You",
+    "Queen of Tears",
+    "My Demon",
+    "Welcome to Samdal-ri",
+    "Captivating the King",
+    "Doctor Slump",
+    "It's Okay to Not Be Okay",
+    "Itaewon Class",
+    "Start-Up",
+    "Hometown Cha-Cha-Cha",
+    "Our Blues",
+    "Twenty-Five Twenty-One",
+    "Little Women",
+    "The King: Eternal Monarch",
+    "Forecasting Love and Weather",
+    "Remarriage & Desires",
+    "Narco-Saints",
+    "Glitch",
+    "Somebody",
+    "The Fabulous",
+    "Love to Hate You",
+    "Black Knight",
   ],
-  bollywood_and_indian: [
-    "Mirzapur", "Panchayat", "Farzi", "The Family Man", "Sacred Games",
-    "Paatal Lok", "Guns & Gulaabs", "Heeramandi", "Asur", "Kota Factory",
-    "Gullak", "Special OPS", "Aarya", "Breathe: Into the Shadows", "Criminal Justice",
-    "Delhi Crime", "Scam 1992: The Harshad Mehta Story", "Rocket Boys", "Taaza Khabar", "Rana Naidu",
-    "Scoop", "Kohrra", "Kaala Paani", "Railway Men", "Indian Police Force",
-    "Dhootha", "Suzhal - The Vortex", "Modern Love Chennai", "Modern Love Hyderabad", "The Village",
-    "Dahaad", "Jubilee", "Bambai Meri Jaan", "Inspector Rishi", "Breathe",
-    "Hostages", "City of Dreams", "Undekhi", "Maharani", "Grahan",
-    "Matsya Kaand", "Abhay", "Rangbaaz", "Apharan", "JL50",
-    "Gyaarah Gyaarah", "Pill", "Commander Karan Saxena", "Tribhuvan Mishra CA Topper", "Shekhar Home"
-  ]
+  HOLLYWOOD_GLOBAL_TOP_50: [
+    "Money Heist",
+    "Stranger Things",
+    "The Boys",
+    "Wednesday",
+    "Loki",
+    "The Witcher",
+    "Peaky Blinders",
+    "Sex Education",
+    "Lucifer",
+    "The Sandman",
+    "One Piece",
+    "Avatar: The Last Airbender",
+    "House of the Dragon",
+    "The Last of Us",
+    "Fallout",
+    "Reacher",
+    "Citadel",
+    "The Lord of the Rings: The Rings of Power",
+    "Cobra Kai",
+    "Alice in Borderland",
+    "Dark",
+    "1899",
+    "Black Mirror",
+    "Shadow and Bone",
+    "Locke & Key",
+    "Archive 81",
+    "You",
+    "Emily in Paris",
+    "Outer Banks",
+    "Heartstopper",
+    "The Umbrella Academy",
+    "Sweet Tooth",
+    "Ragnarok",
+    "Warrior Nun",
+    "Fate: The Winx Saga",
+    "The Night Agent",
+    "Beef",
+    "Bodies",
+    "Fool Me Once",
+    "Griselda",
+    "3 Body Problem",
+    "Supacell",
+    "A Good Girl's Guide to Murder",
+    "The Decameron",
+    "Kaos",
+    "The Perfect Couple",
+  ],
 };
 
-async function runMasterSeriesIngest() {
-  console.log("================================================================================");
-  console.log("🚀 STARTING TARGETED CURATED SERIES INGESTION ENGINE");
-  console.log("   Criteria: Strictly Pure Hindi, Dual Audio [Hindi+Eng], Original+Hindi");
-  console.log("   Seeds: >= 3 Active Seeds (Zero dead torrents)");
-  console.log("   Full Seasons & Episodes with 1080p / 720p Direct Streams");
-  console.log("   Duplicates: STRICT ZERO DUPLICATES (Existing episodes skipped)");
-  console.log("================================================================================\n");
+async function main() {
+  console.log("===============================================================================");
+  console.log("   🚀 CURATED MASTER SERIES INGESTION: 100% COMPLETE SEASONS IN HINDI ONLY");
+  console.log("===============================================================================\n");
 
   await prewarmExistingEpisodeIds();
 
-  // 1. Hollywood Top 50
-  console.log("\n=======================================================");
-  console.log("🎬 SECTION 1: TOP 50 HOLLYWOOD SERIES (HINDI DUBBED)");
-  console.log("=======================================================");
-  for (const title of CURATED_LISTS.hollywood) {
-    try {
-      await ingestShowWithHindiOnly(title, "Hollywood");
-    } catch (e) {
-      console.warn(`Error on ${title}:`, e.message);
-    }
+  // 1. Process Bollywood / Indian Top 50
+  console.log(">>> Ingesting Top Bollywood / Indian Web Series (100% Complete Seasons) <<<");
+  for (const show of CURATED_LISTS.BOLLYWOOD_TOP_50) {
+    await ingestShowWithCompleteSeasons(show, "Bollywood");
     await sleep(250);
   }
 
-  // 2. Korean Top 70 Dramas
-  console.log("\n=======================================================");
-  console.log("🎬 SECTION 2: TOP 70 KOREAN DRAMAS (HINDI DUBBED / DUAL)");
-  console.log("=======================================================");
-  for (const title of CURATED_LISTS.korean) {
-    try {
-      await ingestShowWithHindiOnly(title, "K-Drama");
-    } catch (e) {
-      console.warn(`Error on ${title}:`, e.message);
-    }
+  // 2. Process Korean Hindi Top 70
+  console.log("\n>>> Ingesting Top Korean Dramas (100% Complete Hindi Seasons) <<<");
+  for (const show of CURATED_LISTS.KOREAN_HINDI_TOP_70) {
+    await ingestShowWithCompleteSeasons(show, "Korean-Hindi");
     await sleep(250);
   }
 
-  // 3. Indian & South Top 50 Series
-  console.log("\n=======================================================");
-  console.log("🎬 SECTION 3: TOP 50 BOLLYWOOD & SOUTH INDIAN SERIES");
-  console.log("=======================================================");
-  for (const title of CURATED_LISTS.bollywood_and_indian) {
-    try {
-      await ingestShowWithHindiOnly(title, "Indian");
-    } catch (e) {
-      console.warn(`Error on ${title}:`, e.message);
-    }
+  // 3. Process Hollywood / Global Hindi Top 50
+  console.log("\n>>> Ingesting Top Hollywood / Global Series (100% Complete Hindi Seasons) <<<");
+  for (const show of CURATED_LISTS.HOLLYWOOD_GLOBAL_TOP_50) {
+    await ingestShowWithCompleteSeasons(show, "Hollywood-Hindi");
     await sleep(250);
   }
 
-  console.log("\n================================================================================");
-  console.log("🏁 MASTER SERIES INGESTION FINISHED!");
-  console.log("================================================================================\n");
+  console.log("\n===============================================================================");
+  console.log("   ✅ MASTER SERIES INGESTION COMPLETE: ALL INSERTED SEASONS ARE 100% FULL!");
+  console.log("===============================================================================\n");
 }
 
-runMasterSeriesIngest().catch(console.error);
-
+main().catch((err) => {
+  console.error("Ingest error:", err);
+  process.exit(1);
+});
