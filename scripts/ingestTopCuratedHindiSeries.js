@@ -22,10 +22,10 @@ require("dotenv").config();
 if (typeof globalThis.WebSocket === "undefined") {
   globalThis.WebSocket = class WebSocketPolyfill {
     constructor() { this.readyState = 0; }
-    addEventListener() {}
-    removeEventListener() {}
-    send() {}
-    close() {}
+    addEventListener() { }
+    removeEventListener() { }
+    send() { }
+    close() { }
   };
 }
 
@@ -232,7 +232,7 @@ async function ingestShowWithCompleteSeasons(showQuery, industryTag = "") {
     try {
       const sRes = await fetch(`https://api.themoviedb.org/3/tv/${showId}/season/${sNum}?api_key=${TMDB_API_KEY}`);
       sData = await sRes.json();
-    } catch {}
+    } catch { }
 
     if (!sData || !Array.isArray(sData.episodes) || sData.episodes.length === 0) continue;
 
