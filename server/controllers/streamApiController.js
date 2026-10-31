@@ -262,9 +262,18 @@ const getStream = asyncHandler(async (req, res) => {
   const providers = buildProviderUrls(tmdbId, mediaType, season, episode);
 
   if (!directStreamUrl) {
-    // MultiEmbed is default primary because it has 99.8% hit rate on Hindi/Indian/Global titles
-    directStreamUrl = providers[0].url;
-    directDownloadUrl = providers[0].url;
+    // Prioritize native torrent stream engine bridge so ExoPlayer plays natively (no web embed!)
+    const torrentCand = candidates.find((c) => c.row?.stream_url && c.row.stream_url.includes("/api/media/stream/torrent/"));
+    if (torrentCand) {
+      directStreamUrl = torrentCand.row.stream_url;
+      directDownloadUrl = torrentCand.row.download_url || torrentCand.row.stream_url;
+      torrentMagnet = candidateMagnet(torrentCand.row);
+      resolved = { cand: torrentCand, streamUrl: directStreamUrl, downloadUrl: directDownloadUrl, torbox: null };
+      console.log(`[streamApiController] TorBox not ready; using native torrent engine stream for TMDB ${tmdbId}`);
+    } else {
+      directStreamUrl = providers[0].url;
+      directDownloadUrl = providers[0].url;
+    }
   }
 
   const responsePayload = {
