@@ -65,6 +65,8 @@ function main() {
     // Once a day: new episodes of shows aired in the last 30 days; episodes still
     // without Hindi are retried every day until a Hindi release appears.
     steps.push(runStep("new series episodes", "ingestSeriesHindi.js", ["--days=30", "--pages=1"]));
+    // Top curated series 100% complete seasons (Bollywood, Hollywood, Korean)
+    steps.push(runStep("curated full series", "ingestTopCuratedHindiSeries.js", []));
   }
   if (weekly) {
     // Once a week: Hindi dubs that arrive months after release, plus the classics.
