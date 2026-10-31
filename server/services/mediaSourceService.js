@@ -883,7 +883,12 @@ async function saveTorrentRelease(params, release) {
   const e = Number(params?.episode);
   const isEp = Number.isInteger(s) && s > 0 && Number.isInteger(e) && e > 0;
   const magnet = String(release?.magnet_link || release?.download_url || "").trim();
-  const written = magnetWrite(magnet, params?.baseUrl || params?.req || null, isEp ? e : null);
+  const written = magnetWrite(magnet, params?.baseUrl || params?.req || null, {
+    episode: isEp ? e : null,
+    season: isEp ? s : null,
+    fileIdx: release.file_idx ?? null,
+    fileName: release.file_name ?? null,
+  });
   if (!written) return null;
   let hinted = publicSize({ ...release, magnet_link: magnet });
   if (!hinted.size_bytes) hinted = await lookupReleaseBytes({ ...release, magnet_link: magnet });

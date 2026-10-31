@@ -237,14 +237,31 @@ function acceptTorrentRelease({ title, sizeBytes, size, quality, mediaType, meta
  * Magnet converted into pre-converted DDL HTTP stream endpoints (.mp4/.mkv).
  * NEVER stores raw magnet in download_url or stream_url!
  */
-function magnetWrite(magnetLink, reqOrBaseUrl = null, episode = null) {
+function magnetWrite(magnetLink, reqOrBaseUrl = null, options = {}) {
+  const opts = typeof options === "object" && options !== null ? options : { episode: options };
   const magnet = String(magnetLink || "").trim();
   if (!/^magnet:/i.test(magnet)) return null;
   const hash = /btih:([a-f0-9]{40}|[a-z2-7]{32})/i.exec(magnet)?.[1]?.toLowerCase();
   if (hash) {
     const { buildTorrentStreamUrl } = require("./torrentStreamEngine");
-    const downloadUrl = buildTorrentStreamUrl(reqOrBaseUrl, { magnet, infoHash: hash, isDownload: true, episode });
-    const streamUrl = buildTorrentStreamUrl(reqOrBaseUrl, { magnet, infoHash: hash, isDownload: false, episode });
+    const downloadUrl = buildTorrentStreamUrl(reqOrBaseUrl, {
+      magnet,
+      infoHash: hash,
+      isDownload: true,
+      episode: opts.episode,
+      season: opts.season,
+      fileIdx: opts.fileIdx,
+      fileName: opts.fileName,
+    });
+    const streamUrl = buildTorrentStreamUrl(reqOrBaseUrl, {
+      magnet,
+      infoHash: hash,
+      isDownload: false,
+      episode: opts.episode,
+      season: opts.season,
+      fileIdx: opts.fileIdx,
+      fileName: opts.fileName,
+    });
     return {
       download_url: downloadUrl,
       stream_url: streamUrl,

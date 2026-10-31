@@ -453,7 +453,8 @@ async function getOrStartEngine(magnetOrHash, { timeoutMs = 35000 } = {}) {
  * Streams the selected torrent file through this API. Torrent failures always
  * produce a JSON error; this route never falls back to an external web player.
  */
-async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = false } = {}) {
+async function streamTorrentToHttp(req, res, options = {}) {
+  const { magnet, infoHash, isDownload = false, episode = null, season = null, fileIndex = null } = options;
   if (req.setTimeout) req.setTimeout(0);
   if (res.setTimeout) res.setTimeout(0);
   if (req.socket?.setTimeout) req.socket.setTimeout(0);
@@ -535,9 +536,9 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
   }
 
   const files = record.engine?.files || [];
-  const requestedEpisode = options?.episode ?? req.query.episode ?? req.query.ep;
-  const requestedSeason = options?.season ?? req.query.season ?? req.query.s;
-  const fileIndexProvided = options?.fileIndex != null || req.query.fileIndex != null || req.query.fileIdx != null;
+  const requestedEpisode = episode ?? options?.episode ?? req.query.episode ?? req.query.ep;
+  const requestedSeason = season ?? options?.season ?? req.query.season ?? req.query.s;
+  const fileIndexProvided = fileIndex != null || options?.fileIndex != null || req.query.fileIndex != null || req.query.fileIdx != null;
   let targetFile = null;
 
   if (requestedEpisode != null) {
@@ -578,8 +579,8 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
       });
     }
   } else if (fileIndexProvided) {
-    const fileIndex = Number(options?.fileIndex ?? req.query.fileIndex ?? req.query.fileIdx);
-    const candidate = Number.isInteger(fileIndex) && fileIndex >= 0 ? files[fileIndex] : null;
+    const targetFileIndex = Number(fileIndex ?? options?.fileIndex ?? req.query.fileIndex ?? req.query.fileIdx);
+    const candidate = Number.isInteger(targetFileIndex) && targetFileIndex >= 0 ? files[targetFileIndex] : null;
     if (!candidate || !isCleanVideo(candidate.name || candidate.path)) {
       scheduleIdleCleanup(record.infoHash);
       return res.status(400).json({
@@ -674,7 +675,7 @@ async function streamTorrentToHttp(req, res, { magnet, infoHash, isDownload = fa
   };
 
   if (req.method === "HEAD") {
-    res.set({ ...headers, "Content-Length": totalSize });
+    res.set({ ...headers, "Content-Length": totalSize, "Content-Range": `bytes 0-${totalSize - 1}/${totalSize}` });
     scheduleIdleCleanup(record.infoHash);
     return res.status(200).end();
   }
@@ -858,7 +859,7 @@ function getServerBaseUrl(reqOrHost = null) {
   return "https://cinebroadcast-production.up.railway.app";
 }
 
-function buildTorrentStreamUrl(reqOrBaseUrl, { magnet, infoHash, isDownload = false, episode = null, season = null } = {}) {
+function buildTorrentStreamUrl(reqOrBaseUrl, { magnet, infoHash, isDownload = false, episode = null, season = null, fileIdx = null, fileName = null } = {}) {
   const hash = infoHash || extractInfoHash(magnet);
   if (!hash) return null;
 
@@ -866,6 +867,8 @@ function buildTorrentStreamUrl(reqOrBaseUrl, { magnet, infoHash, isDownload = fa
   const params = [];
   if (season != null && Number(season) > 0) params.push(`s=${encodeURIComponent(season)}`);
   if (episode != null && Number(episode) > 0) params.push(`ep=${encodeURIComponent(episode)}`);
+  if (fileIdx != null && Number(fileIdx) >= 0) params.push(`fileIdx=${encodeURIComponent(fileIdx)}`);
+  if (fileName) params.push(`fileName=${encodeURIComponent(fileName)}`);
   if (isDownload) params.push("download=1");
   const queryStr = params.length ? `?${params.join("&")}` : "";
   // Return clean URL with .mp4 extension so native video downloaders & players recognize it as a direct file!
