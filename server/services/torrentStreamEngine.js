@@ -482,34 +482,19 @@ async function streamTorrentToHttp(req, res, options = {}) {
   } catch (err) {
     console.warn(`[TorrentStream] engine failed for ${requestedHash}:`, err.message);
 
-    // Graceful Cloud Stream Fallback: If swarm is dead or timed out, resolve title from Supabase & redirect to Cloud Stream
+    // If swarm is dead or timed out, mark row as 'unseeded' in Supabase so app never serves it again
     try {
       const { getSupabaseClient } = require("./supabaseClient");
       const sb = getSupabaseClient();
-      if (sb) {
-        const { data } = await sb
-          .from("media_sources")
-          .select("media_id, media_title, payload")
-          .or(`download_url.ilike.%${requestedHash}%,stream_url.ilike.%${requestedHash}%`)
-          .limit(1)
-          .maybeSingle();
-
-        const tmdbId = data?.media_id || data?.payload?.tmdb_id;
-        if (tmdbId && !isNaN(Number(String(tmdbId).split("-")[0]))) {
-          const cleanId = String(tmdbId).split("-")[0];
-          const isTv = String(tmdbId).includes("-s") || req.query.season != null;
-          const season = req.query.season || (String(tmdbId).match(/-s(\d+)/i)?.[1]) || 1;
-          const episode = req.query.episode || (String(tmdbId).match(/e(\d+)/i)?.[1]) || 1;
-          const fallbackUrl = isTv
-            ? `https://vidlink.pro/tv/${encodeURIComponent(cleanId)}/${season}/${episode}?primaryColor=E50914&autoplay=true`
-            : `https://vidlink.pro/movie/${encodeURIComponent(cleanId)}?primaryColor=E50914&autoplay=true`;
-
-          console.log(`[TorrentStream] Dead swarm for ${requestedHash}. Gracefully redirecting client to Cloud Stream (TMDB ${cleanId})`);
-          return res.redirect(302, fallbackUrl);
-        }
+      if (sb && requestedHash) {
+        sb.from("media_sources")
+          .update({ status: "unseeded", updated_at: new Date().toISOString() })
+          .or(`download_url.ilike.%${requestedHash}%,stream_url.ilike.%${requestedHash}%,magnet_link.ilike.%${requestedHash}%`)
+          .then(() => console.log(`[TorrentStream] Marked dead torrent ${requestedHash} as unseeded in media_sources`))
+          .catch((updateErr) => console.warn(`[TorrentStream] Failed to update unseeded status:`, updateErr.message));
       }
-    } catch (fallbackErr) {
-      console.warn("[TorrentStream] Fallback lookup error:", fallbackErr.message);
+    } catch (dbErr) {
+      console.warn("[TorrentStream] Database mark unseeded error:", dbErr.message);
     }
 
     const stats = err.swarm || { peerCount: 0, seederCount: 0 };

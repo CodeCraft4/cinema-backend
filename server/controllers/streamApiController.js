@@ -270,17 +270,24 @@ const getStream = asyncHandler(async (req, res) => {
       torrentMagnet = candidateMagnet(torrentCand.row);
       resolved = { cand: torrentCand, streamUrl: directStreamUrl, downloadUrl: directDownloadUrl, torbox: null };
       console.log(`[streamApiController] TorBox not ready; using native torrent engine stream for TMDB ${tmdbId}`);
-    } else {
+    } else if (candidates.length > 0) {
       directStreamUrl = providers[0].url;
       directDownloadUrl = providers[0].url;
+    } else {
+      // No sources exist in database at all (e.g. Walking Dead) — never serve spammy embed links
+      directStreamUrl = null;
+      directDownloadUrl = null;
     }
   }
 
+  const hasStream = Boolean(directStreamUrl);
   const responsePayload = {
-    success: true,
+    success: hasStream,
+    available: hasStream,
     streamUrl: directStreamUrl,
+    error: hasStream ? null : "No stream available for this title yet.",
     torrentMagnet: torrentMagnet || null,
-    backupStreams: providers,
+    backupStreams: hasStream ? providers : [],
     defaultAudio: "hi",
     availableAudios: [
       { label: "Hindi", code: "hi" },
