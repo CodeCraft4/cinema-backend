@@ -11,6 +11,9 @@
  *   node scripts/fillSeriesGaps.js --show 100088          # one TMDB show id
  *   node scripts/fillSeriesGaps.js --hide-bad bad.json    # hide rows listed as unplayable first
  *   node scripts/fillSeriesGaps.js --min-uncached-seeders 20
+ *   node scripts/fillSeriesGaps.js --add-lower            # also add small 720p/480p TorBox-cached
+ *                                                         # releases (phone-friendly, fast start)
+ *                                                         # for episodes that only have 1080p+
  *
  * A release is only inserted when its episode file can be named (Torrentio filename) or the
  * torrent is a single-episode release, so the stream resolver never serves another episode.
@@ -24,7 +27,7 @@ const { getSupabaseClient } = require("../server/services/supabaseClient");
 const env = require("../server/config/env");
 const torbox = require("../server/services/torboxService");
 const { fetchTorrentio } = require("../server/services/torrentioClient");
-const { hindiAudioKind, audioLabel, detectQuality, episodeScope } = require("../server/services/releaseAudio");
+const { hindiAudioKind, audioLabel, detectQuality, deviceCompatPenalty, episodeScope } = require("../server/services/releaseAudio");
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -36,6 +39,7 @@ const opt = (name, fallback = null) => {
 const DRY = flag("--dry-run");
 const ONLY_SHOW = opt("--show");
 const HIDE_BAD = opt("--hide-bad");
+const ADD_LOWER = flag("--add-lower");
 const MIN_UNCACHED_SEEDERS = Number(opt("--min-uncached-seeders", 20));
 const STREAM_BASE = (process.env.SERVER_BASE_URL || process.env.PUBLIC_BACKEND_URL || "http://168.144.249.68:4555").replace(/\/$/, "");
 const TMDB_KEY = process.env.TMDB_API_KEY || env.tmdbApiKey;
@@ -109,11 +113,24 @@ function parseStream(stream, season, episode) {
   };
 }
 
+const AAC_RE = /\baac\b|\bhe-aac\b/i;
+
 function pickBest(cands, cachedSet) {
+  if (ADD_LOWER) {
+    // Small + cached + Hindi + phone-playable (AAC) audio: starts fast on a mobile network.
+    const pool = cands.filter((c) => cachedSet.has(c.hash) && (c.quality === "720p" || c.quality === "480p") && (!c.sizeBytes || c.sizeBytes < 1.6e9) && deviceCompatPenalty(`${c.releaseName} ${c.filename || ""}`) < 3);
+    return pool.sort((a, b) => {
+      const kind = (c) => (c.kind === "dual" ? 0 : c.kind === "hindi" ? 1 : 2);
+      const aac = (c) => (AAC_RE.test(`${c.releaseName} ${c.filename || ""}`) ? 0 : 1);
+      const compat = (c) => deviceCompatPenalty(`${c.releaseName} ${c.filename || ""}`);
+      return kind(a) - kind(b) || compat(a) - compat(b) || aac(a) - aac(b) || (a.quality === "720p" ? 0 : 1) - (b.quality === "720p" ? 0 : 1) || (a.sizeBytes || 9e9) - (b.sizeBytes || 9e9);
+    })[0];
+  }
   const qRank = (q) => ({ "1080p": 0, "720p": 1, "480p": 2, "2160p": 3, "360p": 4 }[q] ?? 5);
   const score = (c) => [
     cachedSet.has(c.hash) ? 0 : 1, // cached first: starts in seconds
     c.kind === "dual" ? 0 : c.kind === "hindi" ? 1 : 2, // Hindi audio first
+    deviceCompatPenalty(`${c.releaseName} ${c.filename || ""}`) >= 3 ? 1 : 0, // 10-bit / HDR / 7.1: often unplayable on phones
     c.sizeBytes > 6e9 ? 1 : 0, // avoid huge files for fast start
     qRank(c.quality),
     -c.seeders,
@@ -188,7 +205,7 @@ async function main() {
   for (let from = 0; ; from += 1000) {
     const { data, error } = await sb
       .from("media_sources")
-      .select("media_id,payload")
+      .select("media_id,payload,quality")
       .like("media_id", "%-s%e%")
       .eq("status", "ready")
       .range(from, from + 999)
@@ -198,12 +215,17 @@ async function main() {
     if (data.length < 1000) break;
   }
   const have = new Map(); // showId -> Set("s:e")
+  const lowHave = new Map(); // showId -> Set("s:e") that already has a 720p / 480p row
   const templates = new Map();
   for (const r of rows) {
     const m = /^(\d+)-s(\d+)e(\d+)$/i.exec(r.media_id);
     if (!m) continue;
     if (!have.has(m[1])) have.set(m[1], new Set());
     have.get(m[1]).add(`${+m[2]}:${+m[3]}`);
+    if (/^(720p|480p|360p)$/.test(String(r.quality))) {
+      if (!lowHave.has(m[1])) lowHave.set(m[1], new Set());
+      lowHave.get(m[1]).add(`${+m[2]}:${+m[3]}`);
+    }
     if (!templates.has(m[1]) && r.payload) {
       const { poster_url, backdrop_url, series_poster_url, rating } = r.payload;
       templates.set(m[1], { poster_url, backdrop_url, series_poster_url, rating });
@@ -225,7 +247,9 @@ async function main() {
       if (s.season_number === 0) continue;
       const sd = await tmdb(`/tv/${showId}/season/${s.season_number}`);
       for (const e of sd?.episodes || []) {
-        if (e.air_date && e.air_date <= today && !have.get(showId).has(`${s.season_number}:${e.episode_number}`)) {
+        const k = `${s.season_number}:${e.episode_number}`;
+        const wanted = ADD_LOWER ? have.get(showId).has(k) && !lowHave.get(showId)?.has(k) : !have.get(showId).has(k);
+        if (e.air_date && e.air_date <= today && wanted) {
           missing.push({ season: s.season_number, episode: e.episode_number, info: e });
         }
       }
@@ -259,7 +283,7 @@ async function main() {
     for (const p of perEp) {
       const best = pickBest(p.cands, cachedSet);
       const isCached = best ? cachedSet.has(best.hash) : false;
-      if (!best || (!isCached && best.seeders < MIN_UNCACHED_SEEDERS)) {
+      if (!best || (!ADD_LOWER && !isCached && best.seeders < MIN_UNCACHED_SEEDERS)) {
         report.notFound.push({ showId, name: info.name, season: p.season, episode: p.episode, reason: best ? `uncached, ${best.seeders} seeders` : "no release" });
         continue;
       }

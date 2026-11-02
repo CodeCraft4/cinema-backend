@@ -76,6 +76,23 @@ function audioLabel(kind) {
   return "Original";
 }
 
+/**
+ * How hard a release is to play on a phone (0 = easy). Name based, no probing:
+ *  +3  10-bit / HDR / Dolby Vision video, or 7.1 / Atmos / TrueHD / DTS audio (often fail or play silent)
+ *  +1  HEVC / x265 (needs a hardware decoder; fine on most, slow on cheap phones)
+ *  -1  plain H.264 / AVC
+ */
+const HARD_VIDEO_RE = /\b(10[ ._-]?bit|hi10p?|hdr10?\+?|hdr|dolby[ ._-]?vision|dv)\b/i;
+const HARD_AUDIO_RE = /\b7[ .]1\b|\batmos\b|\btruehd\b|\bdts(?:[ -]?hd)?\b/i;
+function deviceCompatPenalty(name) {
+  const text = String(name || "");
+  let penalty = 0;
+  if (HARD_VIDEO_RE.test(text) || HARD_AUDIO_RE.test(text)) penalty += 3;
+  if (/\b(hevc|x265|h[ .]?265)\b/i.test(text)) penalty += 1;
+  else if (/\b(x264|h[ .]?264|avc)\b/i.test(text)) penalty -= 1;
+  return penalty;
+}
+
 function detectQuality(name, fallback) {
   for (const [label, re] of QUALITY_RE) {
     if (re.test(String(name || ""))) return label;
@@ -133,6 +150,7 @@ module.exports = {
   hindiAudioKind,
   audioLabel,
   detectQuality,
+  deviceCompatPenalty,
   episodeTags,
   episodeScope,
 };

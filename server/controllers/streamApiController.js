@@ -5,7 +5,7 @@ const { getSupabaseClient } = require("../services/supabaseClient");
 const { asyncHandler } = require("../utils/http");
 const { memoryCache } = require("../services/memoryCache");
 const torboxService = require("../services/torboxService");
-const { releaseName, hindiAudioKind, audioLabel, detectQuality, episodeScope, packCoversSeason } = require("../services/releaseAudio");
+const { releaseName, hindiAudioKind, audioLabel, detectQuality, deviceCompatPenalty, episodeScope, packCoversSeason } = require("../services/releaseAudio");
 const { probeHindiAudio } = require("../services/audioTrackProbe");
 
 // Streaming starts small so playback begins fast on slow connections.
@@ -91,6 +91,8 @@ function rankCandidates(rows, { mediaType, season, episode, audio, quality, qual
     (a, b) =>
       qRank(a.quality) - qRank(b.quality) ||
       camRank(a.name) - camRank(b.name) ||
+      // Within a quality tier: the release a phone can actually decode comes first.
+      deviceCompatPenalty(a.name) - deviceCompatPenalty(b.name) ||
       codecRank(a.name) - codecRank(b.name) ||
       audioRank(a.kind) - audioRank(b.kind) ||
       scopeRank(a.scope) - scopeRank(b.scope) ||
