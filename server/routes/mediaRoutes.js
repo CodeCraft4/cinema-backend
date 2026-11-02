@@ -3,7 +3,7 @@
 const { Router } = require("express");
 const controller = require("../controllers/mediaDownloadController");
 const { searchCatalog } = require("../controllers/catalogSearchController");
-const { handleTorrentStream } = require("../controllers/torrentStreamController");
+const { handleTorrentStream, handleRemux } = require("../controllers/torrentStreamController");
 const { fetchTmdbCatalog } = require("../controllers/tmdbFetchController");
 const { enrichMissing, enrichMissingStatus, stopEnrichMissing } = require("../controllers/enrichMissingController");
 
@@ -29,6 +29,7 @@ router.get("/download-sources", controller.getMediaSources);
 router.get("/download-source", controller.getMediaSources);
 
 // On-The-Fly Torrent-to-HTTP Streaming & Download Engine (GET & HEAD)
+router.get("/remux", handleRemux);
 router.get("/stream/torrent", handleTorrentStream);
 router.head("/stream/torrent", handleTorrentStream);
 router.get("/stream/torrent/:hash", handleTorrentStream);

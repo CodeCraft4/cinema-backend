@@ -116,7 +116,10 @@ async function probeHindiAudio(url, fileName = "") {
         const tracks = parseMkvAudioTracks(buf);
         if (tracks) {
           const hindi = tracks.map((t, index) => ({ ...t, index })).filter(isHindiTrack);
+          const header = buf.toString("latin1");
+          const videoCodec = header.includes("V_MPEG4/ISO/AVC") ? "AVC" : header.includes("V_MPEGH/ISO/HEVC") ? "HEVC" : null;
           result = {
+            videoCodec,
             tracks: tracks.map((t, index) => ({ index, language: t.language, codec: t.codec, name: t.name, isDefault: t.isDefault })),
             hindi: hindi.map((t) => ({ index: t.index, language: t.language, codec: t.codec })),
             hindiPlayable: hindi.some((t) => PHONE_SAFE_CODEC_RE.test(t.codec)),

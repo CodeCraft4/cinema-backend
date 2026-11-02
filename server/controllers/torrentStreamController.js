@@ -3,6 +3,7 @@
 const { asyncHandler } = require("../utils/http");
 const { streamTorrentToHttp, extractInfoHash, normalizeMagnet } = require("../services/torrentStreamEngine");
 const torboxService = require("../services/torboxService");
+const remuxService = require("../services/remuxService");
 
 /**
  * Controller for GET / HEAD /api/media/stream/torrent...
@@ -85,6 +86,15 @@ const handleTorrentStream = asyncHandler(async (req, res) => {
   });
 });
 
+/** GET /api/media/remux?u=<TorBox https link>&a=<audio track index>  (video copied, audio -> AAC) */
+const handleRemux = asyncHandler(async (req, res) => {
+  const url = String(req.query.u || "");
+  if (!remuxService.isAvailable()) return res.status(501).json({ ok: false, error: "ffmpeg is not installed on this server." });
+  if (!remuxService.isAllowedSource(url)) return res.status(400).json({ ok: false, error: "Only TorBox links can be remuxed." });
+  remuxService.streamRemuxed(url, req.query.a, res, { startSeconds: Number(req.query.t) || 0 });
+});
+
 module.exports = {
   handleTorrentStream,
+  handleRemux,
 };

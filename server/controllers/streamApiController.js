@@ -7,6 +7,7 @@ const { memoryCache } = require("../services/memoryCache");
 const torboxService = require("../services/torboxService");
 const { releaseName, hindiAudioKind, audioLabel, detectQuality, deviceCompatPenalty, episodeScope, packCoversSeason } = require("../services/releaseAudio");
 const { probeHindiAudio } = require("../services/audioTrackProbe");
+const remuxService = require("../services/remuxService");
 
 // Streaming starts small so playback begins fast on slow connections.
 const STREAM_QUALITY_ORDER = ["480p", "720p", "1080p", "2160p", "360p", ""];
@@ -139,6 +140,13 @@ async function resolveFirstPlayable(candidates, { season, episode, isTv, hindi =
       if (!hindi) return resolved;
       resolved.audioProbe = await probeHindiAudio(tb.streamUrl, tb.fileName);
       if (!resolved.audioProbe || resolved.audioProbe.hindiPlayable) return resolved;
+      // H.264 video with a Hindi track the phone cannot decode (AC3 / E-AC3 / DTS): the server
+      // converts just that audio to AAC (video copied), so the file plays instead of erroring.
+      const probe = resolved.audioProbe;
+      if (probe.videoCodec === "AVC" && probe.hindi.length > 0 && remuxService.isAvailable()) {
+        resolved.remux = { audioIndex: probe.hindi[0].index };
+        return resolved;
+      }
       console.warn(`[streamApiController] Hindi track not phone-playable (${resolved.audioProbe.hindi.map((t) => t.codec).join(",") || "none"}): ${cand.name}`);
       silentHindiFallback ||= resolved;
     } catch (tbErr) {
@@ -258,6 +266,10 @@ const getStream = asyncHandler(async (req, res) => {
         directStreamUrl = resolved.streamUrl;
         directDownloadUrl = resolved.downloadUrl;
         torrentMagnet = candidateMagnet(resolved.cand.row);
+        if (resolved.remux) {
+          const base = (process.env.SERVER_BASE_URL || process.env.PUBLIC_BACKEND_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+          directStreamUrl = `${base}/api/media/remux?u=${encodeURIComponent(resolved.streamUrl)}&a=${resolved.remux.audioIndex}`;
+        }
       } else {
         torrentMagnet = candidates.map((c) => candidateMagnet(c.row)).find(Boolean) || null;
       }
@@ -344,7 +356,8 @@ const getStream = asyncHandler(async (req, res) => {
     // Cloud pages the app falls back to (hidden sniffer -> native player) when the TorBox file is slow
     // to start or cannot be decoded on the phone (10-bit / HEVC / E-AC3 / REMUX).
     fallbackStreams: hasStream ? buildFallbackStreams(tmdbId, mediaType, season, episode) : [],
-    deviceRisk: Boolean(resolved && deviceCompatPenalty(resolved.cand.name) >= 3),
+    deviceRisk: Boolean(resolved && !resolved.remux && deviceCompatPenalty(resolved.cand.name) >= 3),
+    remuxed: Boolean(resolved && resolved.remux),
     defaultAudio: "hi",
     availableAudios: [
       { label: "Hindi", code: "hi" },

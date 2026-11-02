@@ -357,7 +357,11 @@ async function main() {
   fs.writeFileSync(REPORT, JSON.stringify(report, null, 1));
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+module.exports = { buildRow, tmdb, checkCachedBatch };
