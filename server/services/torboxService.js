@@ -13,6 +13,31 @@ const { episodeScope } = require("./releaseAudio");
 
 const TORBOX_BASE_URL = "https://api.torbox.app/v1/api";
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * fetch + JSON for TorBox. TorBox answers bursts with 429 or a plain-text
+ * "rate limit exceeded" body; wait and retry instead of failing the stream.
+ */
+async function tbRequest(url, options = {}, timeoutMs = 6000, retries = 3) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
+    const text = await res.text();
+    const limited = res.status === 429 || /rate limit/i.test(text);
+    if (limited && attempt < retries) {
+      await sleep(1200 * (attempt + 1));
+      continue;
+    }
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // non-JSON body (rate limit page / gateway error)
+    }
+    return { ok: res.ok, status: res.status, json, limited };
+  }
+}
+
 function getApiKey() {
   return env.torboxApiKey || process.env.TORBOX_API_KEY || "";
 }
@@ -46,26 +71,27 @@ function sanitizeMagnet(magnet) {
 async function checkCached(hash) {
   const apiKey = getApiKey();
   if (!apiKey || !hash) return false;
+  const lower = String(hash).toLowerCase();
+  const key = `torbox:cached:${lower}`;
+  const known = memoryCache.get(key);
+  if (known === "yes") return true;
+  if (known === "no") return false;
 
   try {
-    const res = await fetch(
-      `${TORBOX_BASE_URL}/torrents/checkcached?hash=${hash}&format=object`,
-      {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(8000),
-      }
+    const { json } = await tbRequest(
+      `${TORBOX_BASE_URL}/torrents/checkcached?hash=${lower}&format=object`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+      8000
     );
-
-    if (!res.ok) return false;
-    const json = await res.json();
-    if (json.success && json.data) {
-      const entry = json.data[hash.toLowerCase()] || json.data[hash.toUpperCase()];
-      return Boolean(entry);
-    }
-    return false;
+    // No usable answer (rate limited / outage): unknown, the caller decides.
+    if (!json || !json.success) return null;
+    const entry = json.data && (json.data[lower] || json.data[lower.toUpperCase()]);
+    const isCached = Boolean(entry);
+    memoryCache.set(key, isCached ? "yes" : "no", isCached ? 60 * 60 * 1000 : 3 * 60 * 1000);
+    return isCached;
   } catch (err) {
     console.warn("[TorboxService] checkCached error:", err.message);
-    return false;
+    return null;
   }
 }
 
@@ -85,21 +111,18 @@ async function createTorrent(magnet) {
     body.append("seed", "1"); // Auto seed
     body.append("allow_zip", "false");
 
-    const res = await fetch(`${TORBOX_BASE_URL}/torrents/createtorrent`, {
+    const { json } = await tbRequest(`${TORBOX_BASE_URL}/torrents/createtorrent`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: body.toString(),
-      signal: AbortSignal.timeout(6000),
     });
-
-    const json = await res.json();
-    if (json.success && json.data) {
+    if (json?.success && json.data) {
       return json.data;
     }
-    console.warn("[TorboxService] createtorrent failed:", json.detail || json.error);
+    console.warn("[TorboxService] createtorrent failed:", json?.detail || json?.error || "no response");
     return null;
   } catch (err) {
     console.warn("[TorboxService] createtorrent request error:", err.message);
@@ -117,17 +140,12 @@ async function getTorrentFiles(torrentId) {
   if (!apiKey || !torrentId) return null;
 
   try {
-    const res = await fetch(
+    const { json } = await tbRequest(
       `${TORBOX_BASE_URL}/torrents/mylist?id=${torrentId}`,
-      {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(5000),
-      }
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+      5000
     );
-
-    if (!res.ok) return null;
-    const json = await res.json();
-    if (json.success && json.data) {
+    if (json?.success && json.data) {
       const item = Array.isArray(json.data) ? json.data[0] : json.data;
       // If torrent has 0 seeds / 0% progress and is not cached (like 3 months ETA), return null to trigger instant server fallback
       if (item && !item.cached && !item.download_present && item.progress !== 1) {
@@ -206,6 +224,15 @@ function pickPrimaryVideoFile(files, season = null, episode = null, options = {}
 
     // A single-file torrent already scoped to this episode by its release name.
     if (options.singleEpisode && videoFiles.length === 1) return videoFiles[0];
+
+    // Last resort for a one-season pack whose files carry no episode number at all:
+    // files in natural name order are the episodes in order.
+    if (untagged.length === videoFiles.length && videoFiles.length >= epNum && videoFiles.length <= 40) {
+      const ordered = [...videoFiles].sort((a, b) =>
+        fileName(a).localeCompare(fileName(b), undefined, { numeric: true, sensitivity: "base" })
+      );
+      return ordered[epNum - 1] || null;
+    }
     return null;
   }
 
@@ -236,19 +263,13 @@ async function requestDownloadLink(torrentId, fileId) {
 
   try {
     const targetFile = fileId != null ? `&file_id=${fileId}` : "";
-    const res = await fetch(
+    const { json } = await tbRequest(
       `${TORBOX_BASE_URL}/torrents/requestdl?token=${encodeURIComponent(
         apiKey
       )}&torrent_id=${torrentId}${targetFile}&zip=false`,
-      {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(6000),
-      }
+      { headers: { Authorization: `Bearer ${apiKey}` } }
     );
-
-    if (!res.ok) return null;
-    const json = await res.json();
-    if (json.success && json.data) {
+    if (json?.success && json.data) {
       return typeof json.data === "string" ? json.data : json.data.url || null;
     }
     return null;
@@ -256,6 +277,33 @@ async function requestDownloadLink(torrentId, fileId) {
     console.warn("[TorboxService] requestDownloadLink error:", err.message);
     return null;
   }
+}
+
+/**
+ * Torrent id + file list of a magnet, cached per info hash. All episodes of a season pack
+ * share one hash, so the 2nd..Nth episode skips createtorrent + mylist (fewer TorBox calls,
+ * far less rate limiting, and a faster start).
+ */
+async function getPackFiles(magnet) {
+  const hash = extractInfoHash(magnet);
+  if (!hash) return null;
+  const key = `torbox:pack:${hash}`;
+  const hit = memoryCache.get(key);
+  if (hit) return hit;
+  // Never add a torrent TorBox has not cached: it would sit in the account's queue (slots +
+  // storage) without ever being playable. false = not cached; null = unknown -> try anyway.
+  if ((await checkCached(hash)) === false) return null;
+  const created = await createTorrent(magnet);
+  if (!created || !created.torrent_id) return null;
+  let files = await getTorrentFiles(created.torrent_id);
+  if (!files || files.length === 0) {
+    await sleep(800);
+    files = await getTorrentFiles(created.torrent_id);
+  }
+  if (!files || files.length === 0) return null;
+  const pack = { torrentId: created.torrent_id, name: created.name || null, files };
+  memoryCache.set(key, pack, 30 * 60 * 1000);
+  return pack;
 }
 
 /**
@@ -288,13 +336,11 @@ async function resolveDirectTorboxStream(magnetLink, options = {}) {
   }
 
   try {
-    // 2. Add or fetch torrent on TorBox
-    const created = await createTorrent(magnetLink);
-    if (!created || !created.torrent_id) return null;
-
-    // 3. Inspect files inside the torrent
-    const files = await getTorrentFiles(created.torrent_id);
-    if (!files || files.length === 0) return null;
+    // 2-3. Add the torrent (or reuse it) and read its files; cached per pack.
+    const pack = await getPackFiles(magnetLink);
+    if (!pack) return null;
+    const created = { torrent_id: pack.torrentId, name: pack.name };
+    const files = pack.files;
     const primaryFile = pickPrimaryVideoFile(files, season, episode, {
       singleEpisode: options?.singleEpisode,
       fileName: options?.fileName,
@@ -333,6 +379,7 @@ module.exports = {
   checkCached,
   createTorrent,
   getTorrentFiles,
+  getPackFiles,
   requestDownloadLink,
   resolveDirectTorboxStream,
   extractInfoHash,

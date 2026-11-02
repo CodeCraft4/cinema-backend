@@ -1,7 +1,7 @@
 "use strict";
 
 const { Router } = require("express");
-const { getStream, getManifest, getDownload } = require("../controllers/streamApiController");
+const { getStream, getManifest, getDownload, getSeriesAvailability } = require("../controllers/streamApiController");
 
 const router = Router();
 
@@ -13,6 +13,8 @@ router.head("/stream/manifest/:tmdbId", getManifest);
 router.options("/stream/:tmdbId", (req, res) => res.status(204).end());
 router.get("/stream/:tmdbId", getStream);
 router.head("/stream/:tmdbId", getStream);
+
+router.get("/series/:tmdbId/availability", getSeriesAvailability);
 
 router.options("/download/:tmdbId", (req, res) => res.status(204).end());
 router.get("/download/:tmdbId", getDownload);

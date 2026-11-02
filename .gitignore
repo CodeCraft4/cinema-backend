@@ -142,3 +142,4 @@ vite.config.ts.timestamp-*
 scripts/.new-releases-hindi*.json
 scripts/.media-sources-fix-backup-*.json
 scripts/.autopilot-last.json
+.fill-series-report.json

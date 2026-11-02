@@ -87,9 +87,14 @@ function detectQuality(name, fallback) {
 /** Every SxxEyy tag in a name, e.g. [{ season: 1, episode: 5 }]. */
 function episodeTags(name) {
   const tags = [];
+  // Some uploaders type the letter O for zero ("S01EO3", "SO1E03"); read those as digits.
+  const text = String(name || "").replace(
+    /\b[sS]([0-9oO]{1,2})[ ._-]?[eE]([0-9oO]{1,3})(?![0-9])/g,
+    (_, s, e) => `S${s.replace(/[oO]/g, "0")}E${e.replace(/[oO]/g, "0")}`
+  );
   const re = /\bs(\d{1,2})[ ._-]?e(\d{1,3})(?!\d)/gi;
   let m;
-  while ((m = re.exec(String(name || "")))) tags.push({ season: Number(m[1]), episode: Number(m[2]) });
+  while ((m = re.exec(text))) tags.push({ season: Number(m[1]), episode: Number(m[2]) });
   return tags;
 }
 

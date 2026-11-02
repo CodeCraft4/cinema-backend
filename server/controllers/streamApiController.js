@@ -146,6 +146,28 @@ async function resolveFirstPlayable(candidates, { season, episode, isTv, hindi =
   return silentHindiFallback;
 }
 
+/**
+ * Stream / download URLs of this server's own torrent engine for a row's magnet.
+ * Season and episode are added so a pack serves the requested episode's file.
+ */
+function buildTorrentBridgeUrls(req, row, { isTv, season, episode }) {
+  const magnet = candidateMagnet(row);
+  const hash = torboxService.extractInfoHash(magnet) || torboxService.extractInfoHash(row.stream_url);
+  if (!hash) return null;
+  const base = (process.env.SERVER_BASE_URL || process.env.PUBLIC_BACKEND_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+  const q = new URLSearchParams();
+  if (magnet) q.set("magnet", magnet);
+  if (isTv) {
+    q.set("s", String(season));
+    q.set("ep", String(episode));
+  }
+  const query = q.toString();
+  return {
+    streamUrl: `${base}/api/media/stream/torrent/${hash}/video.mp4${query ? `?${query}` : ""}`,
+    downloadUrl: `${base}/api/media/download/torrent/${hash}/video.mp4?download=1${query ? `&${query}` : ""}`,
+  };
+}
+
 function describeCandidate(cand, resolved) {
   const tb = resolved?.torbox;
   return {
@@ -167,44 +189,6 @@ function describeCandidate(cand, resolved) {
  * 2. GET /api/stream/manifest/:tmdbId
  * 3. GET /api/download/:tmdbId
  */
-
-function buildProviderUrls(tmdbId, mediaType, season = 1, episode = 1) {
-  const isTv = mediaType === "tv";
-  const id = encodeURIComponent(tmdbId);
-
-  // 1. MultiEmbed: Comprehensive Indian/Regional/Global coverage with 10+ mirror hosts (StreamWish, Filelions, etc.)
-  const multiEmbedUrl = isTv
-    ? `https://multiembed.mov/?video_id=${id}&tmdb=1&autoplay=1&s=${season}&e=${episode}`
-    : `https://multiembed.mov/?video_id=${id}&tmdb=1&autoplay=1`;
-
-  // 2. VidSrc: Global CDN player with broad coverage
-  const vidSrcUrl = isTv
-    ? `https://vidsrc.to/embed/tv/${id}/${season}/${episode}?autoplay=1`
-    : `https://vidsrc.to/embed/movie/${id}?autoplay=1`;
-
-  // 3. SmashyStream: High-speed embed player
-  const smashyUrl = isTv
-    ? `https://embed.smashystream.com/playere.php?tmdb=${id}&season=${season}&episode=${episode}`
-    : `https://embed.smashystream.com/playere.php?tmdb=${id}`;
-
-  // 4. VidLink: Clean, fast, zero Cloudflare captcha, ad-free UI, instant autoplay
-  const vidLinkUrl = isTv
-    ? `https://vidlink.pro/tv/${id}/${season}/${episode}?primaryColor=E50914&autoplay=true`
-    : `https://vidlink.pro/movie/${id}?primaryColor=E50914&autoplay=true`;
-
-  // 5. 2Embed: Reliable fallback with high uptime
-  const twoEmbedUrl = isTv
-    ? `https://www.2embed.cc/embedtv/${id}&s=${season}&e=${episode}`
-    : `https://www.2embed.cc/embed/${id}`;
-
-  return [
-    { name: 'Server 1 (MultiCloud - 99% Hit Rate)', url: multiEmbedUrl },
-    { name: 'Server 2 (VidSrc - Global)', url: vidSrcUrl },
-    { name: 'Server 3 (Smashy - Fast)', url: smashyUrl },
-    { name: 'Server 4 (VidLink - Clean HD)', url: vidLinkUrl },
-    { name: 'Server 5 (2Embed - Stable)', url: twoEmbedUrl },
-  ];
-}
 
 const getStream = asyncHandler(async (req, res) => {
   const { tmdbId } = req.params;
@@ -245,7 +229,13 @@ const getStream = asyncHandler(async (req, res) => {
     try {
       const rows = await loadSourceRows(supabase, tmdbId, mediaType, season, episode);
       candidates = rankCandidates(rows, { mediaType, season, episode, audio, quality, qualityOrder: STREAM_QUALITY_ORDER });
-      resolved = await resolveFirstPlayable(candidates, { season, episode, isTv, hindi: wantsHindiAudio(audio) });
+      // No Hindi / Dual release stored for this title: play the original-audio release rather
+      // than showing "Not available yet" (the player tells the user there is no Hindi track).
+      const hindiMissing = candidates.length === 0 && wantsHindiAudio(audio);
+      if (hindiMissing) {
+        candidates = rankCandidates(rows, { mediaType, season, episode, audio: "any", quality, qualityOrder: STREAM_QUALITY_ORDER });
+      }
+      resolved = await resolveFirstPlayable(candidates, { season, episode, isTv, hindi: wantsHindiAudio(audio) && !hindiMissing });
       if (resolved) {
         directStreamUrl = resolved.streamUrl;
         directDownloadUrl = resolved.downloadUrl;
@@ -258,25 +248,21 @@ const getStream = asyncHandler(async (req, res) => {
     }
   }
 
-  // Step 3: Multi-Provider Fallback (MultiEmbed -> VidSrc -> VidLink -> 2Embed)
-  const providers = buildProviderUrls(tmdbId, mediaType, season, episode);
-
+  // Step 3: TorBox could not serve it (not cached yet / busy). Fall back to this server's own
+  // torrent engine, which ExoPlayer plays natively. Web embed pages ("cloud player") are never served.
   if (!directStreamUrl) {
-    // Prioritize native torrent stream engine bridge so ExoPlayer plays natively (no web embed!)
-    const torrentCand = candidates.find((c) => c.row?.stream_url && c.row.stream_url.includes("/api/media/stream/torrent/"));
+    // Prefer a candidate that has a magnet; the bridge URL is rebuilt from it so it always
+    // names the requested episode (a bare bridge URL streams the pack's largest file).
+    const torrentCand = candidates.find((c) => candidateMagnet(c.row) || c.row?.stream_url?.includes("/api/media/stream/torrent/"));
     if (torrentCand) {
-      directStreamUrl = torrentCand.row.stream_url;
-      directDownloadUrl = torrentCand.row.download_url || torrentCand.row.stream_url;
-      torrentMagnet = candidateMagnet(torrentCand.row);
-      resolved = { cand: torrentCand, streamUrl: directStreamUrl, downloadUrl: directDownloadUrl, torbox: null };
-      console.log(`[streamApiController] TorBox not ready; using native torrent engine stream for TMDB ${tmdbId}`);
-    } else if (candidates.length > 0) {
-      directStreamUrl = providers[0].url;
-      directDownloadUrl = providers[0].url;
-    } else {
-      // No sources exist in database at all (e.g. Walking Dead) — never serve spammy embed links
-      directStreamUrl = null;
-      directDownloadUrl = null;
+      const bridge = buildTorrentBridgeUrls(req, torrentCand.row, { isTv, season, episode });
+      if (bridge) {
+        directStreamUrl = bridge.streamUrl;
+        directDownloadUrl = bridge.downloadUrl;
+        torrentMagnet = candidateMagnet(torrentCand.row);
+        resolved = { cand: torrentCand, streamUrl: directStreamUrl, downloadUrl: directDownloadUrl, torbox: null };
+        console.log(`[streamApiController] TorBox not ready; using native torrent engine stream for TMDB ${tmdbId}`);
+      }
     }
   }
 
@@ -287,7 +273,8 @@ const getStream = asyncHandler(async (req, res) => {
     streamUrl: directStreamUrl,
     error: hasStream ? null : "No stream available for this title yet.",
     torrentMagnet: torrentMagnet || null,
-    backupStreams: hasStream ? providers : [],
+    // Only native, directly playable sources. No embed / third-party player servers.
+    backupStreams: [],
     defaultAudio: "hi",
     availableAudios: [
       { label: "Hindi", code: "hi" },
@@ -311,6 +298,70 @@ const getStream = asyncHandler(async (req, res) => {
   return res.json(responsePayload);
 });
 
+/**
+ * GET /api/series/:tmdbId/availability
+ * Every season and episode of a series in ONE request: which episodes can be played, with the
+ * quality / audio / size of the release the stream resolver would pick. Metadata only (no
+ * TorBox calls), one light Supabase query, cached 10 minutes, so opening a series costs the
+ * server almost nothing no matter how many seasons it has.
+ */
+const getSeriesAvailability = asyncHandler(async (req, res) => {
+  const { tmdbId } = req.params;
+  if (!/^\d+$/.test(String(tmdbId))) return res.status(400).json({ success: false, error: "Invalid tmdbId" });
+
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
+
+  const cacheKey = `series-availability:${tmdbId}`;
+  const cachedPayload = memoryCache.get(cacheKey);
+  if (cachedPayload) return res.json({ ...cachedPayload, cached: true });
+
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from("media_sources")
+    .select("media_id, quality, language, seeders, size_bytes, size_human, magnet_link, download_url, payload")
+    .eq("status", "ready")
+    .like("media_id", `${tmdbId}-s%`)
+    .limit(3000);
+  if (error) throw error;
+
+  const byEpisode = new Map();
+  for (const row of data || []) {
+    const m = /-s(\d+)e(\d+)$/i.exec(row.media_id);
+    if (!m) continue;
+    const key = `${Number(m[1])}:${Number(m[2])}`;
+    if (!byEpisode.has(key)) byEpisode.set(key, []);
+    byEpisode.get(key).push(row);
+  }
+
+  const seasons = {};
+  for (const [key, rows] of byEpisode) {
+    const [season, episode] = key.split(":").map(Number);
+    const args = { mediaType: "tv", season, episode, quality: "auto", qualityOrder: STREAM_QUALITY_ORDER };
+    let ranked = rankCandidates(rows, { ...args, audio: "hi" });
+    if (!ranked.length) ranked = rankCandidates(rows, { ...args, audio: "any" });
+    const top = ranked[0];
+    if (!top) continue;
+    const bytes = Number(top.row.size_bytes) || 0;
+    (seasons[season] ||= {})[episode] = {
+      q: top.quality || null,
+      a: top.kind === "dual" ? "dual" : top.kind === "hindi" ? "hindi" : "orig",
+      sz: bytes > 0 && top.scope !== "pack" ? bytes : null,
+      sh: top.scope !== "pack" ? top.row.size_human || null : null,
+      c: top.row.payload?.torbox_cached === true ? 1 : 0,
+    };
+  }
+
+  const payload = {
+    success: true,
+    tmdbId: String(tmdbId),
+    seasons,
+    episodeCount: Object.values(seasons).reduce((n, eps) => n + Object.keys(eps).length, 0),
+  };
+  memoryCache.set(cacheKey, payload, 10 * 60 * 1000);
+  return res.json(payload);
+});
+
 const getManifest = asyncHandler(async (req, res) => {
   const { tmdbId } = req.params;
   const mediaType = req.query.mediaType === "tv" ? "tv" : "movie";
@@ -326,8 +377,8 @@ const getManifest = asyncHandler(async (req, res) => {
     return res.status(400).send("#EXTM3U\n#EXT-X-ERROR: Missing tmdbId\n");
   }
 
-  const providers = buildProviderUrls(tmdbId, mediaType, season, episode);
-  return res.redirect(302, providers[0].url);
+  // Embed-player manifests are retired: playback is native only (TorBox / torrent engine).
+  return res.status(410).send("#EXTM3U\n#EXT-X-ERROR: Embed manifests are no longer served. Use /api/stream/:tmdbId.\n");
 });
 
 const getDownload = asyncHandler(async (req, res) => {
@@ -360,8 +411,12 @@ const getDownload = asyncHandler(async (req, res) => {
   if (supabase) {
     try {
       const rows = await loadSourceRows(supabase, tmdbId, mediaType, season, episode);
-      const candidates = rankCandidates(rows, { mediaType, season, episode, audio, quality, qualityOrder: DOWNLOAD_QUALITY_ORDER });
-      resolved = await resolveFirstPlayable(candidates, { season, episode, isTv, hindi: wantsHindiAudio(audio) });
+      let candidates = rankCandidates(rows, { mediaType, season, episode, audio, quality, qualityOrder: DOWNLOAD_QUALITY_ORDER });
+      const hindiMissing = candidates.length === 0 && wantsHindiAudio(audio);
+      if (hindiMissing) {
+        candidates = rankCandidates(rows, { mediaType, season, episode, audio: "any", quality, qualityOrder: DOWNLOAD_QUALITY_ORDER });
+      }
+      resolved = await resolveFirstPlayable(candidates, { season, episode, isTv, hindi: wantsHindiAudio(audio) && !hindiMissing });
       if (resolved) {
         downloadUrl = resolved.downloadUrl;
         torrentMagnet = candidateMagnet(resolved.cand.row);
@@ -373,17 +428,21 @@ const getDownload = asyncHandler(async (req, res) => {
     }
   }
 
-  const providers = buildProviderUrls(tmdbId, mediaType, season, episode);
+  // TorBox could not serve it: use this server's torrent engine (never an embed page).
+  if (!downloadUrl && torrentMagnet) {
+    const bridge = buildTorrentBridgeUrls(req, { magnet_link: torrentMagnet }, { isTv, season, episode });
+    downloadUrl = bridge?.downloadUrl || null;
+  }
 
   if (!downloadUrl) {
-    downloadUrl = providers[0].url;
+    return res.json({ success: false, downloadUrl: null, error: "No download available for this title yet.", backupDownloads: [] });
   }
 
   const downloadPayload = {
     success: true,
     downloadUrl,
     torrentMagnet: torrentMagnet || null,
-    backupDownloads: providers,
+    backupDownloads: [],
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -401,6 +460,7 @@ const getDownload = asyncHandler(async (req, res) => {
 
 module.exports = {
   getStream,
+  getSeriesAvailability,
   getManifest,
   getDownload,
 };

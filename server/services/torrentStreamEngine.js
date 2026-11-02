@@ -118,7 +118,11 @@ function pickMainVideoFile(files = []) {
 }
 
 function parseEpisodeMarker(file) {
-  const filename = String(file?.name || file?.path || "");
+  // Uploaders sometimes type the letter O for zero ("S01EO3"); read those as digits.
+  const filename = String(file?.name || file?.path || "").replace(
+    /(^|[^a-z0-9])s([0-9o]{1,2})([ ._-]*)e([0-9o]{1,3})(?=$|[^0-9a-z])/gi,
+    (_, pre, s, sep, e) => `${pre}S${s.replace(/o/gi, "0")}${sep}E${e.replace(/o/gi, "0")}`
+  );
   const seasonEpisode = filename.match(/(?:^|[^a-z0-9])s(\d{1,2})[ ._-]*e(\d{1,3})(?=$|[^0-9])/i);
   if (seasonEpisode) {
     return { season: Number(seasonEpisode[1]), episode: Number(seasonEpisode[2]) };
