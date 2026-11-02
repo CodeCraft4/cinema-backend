@@ -313,7 +313,11 @@ async function main() {
   console.log("\nDone.");
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+module.exports = { tmdb, checkCached, parseMovieStream, bestForTier, movieRow, TIERS };

@@ -3,6 +3,7 @@
 const { Router } = require("express");
 const { getStream, getManifest, getDownload, getSeriesAvailability } = require("../controllers/streamApiController");
 const { getTitleRatings } = require("../controllers/titleRatingController");
+const { getHomeFeed } = require("../controllers/homeFeedController");
 
 const router = Router();
 
@@ -17,6 +18,7 @@ router.head("/stream/:tmdbId", getStream);
 
 router.get("/series/:tmdbId/availability", getSeriesAvailability);
 router.get("/title/:type/:tmdbId/ratings", getTitleRatings);
+router.get("/home", getHomeFeed);
 
 router.options("/download/:tmdbId", (req, res) => res.status(204).end());
 router.get("/download/:tmdbId", getDownload);
