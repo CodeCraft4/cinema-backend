@@ -2,6 +2,7 @@
 
 const { Router } = require("express");
 const { getStream, getManifest, getDownload, getSeriesAvailability } = require("../controllers/streamApiController");
+const { getTitleRatings } = require("../controllers/titleRatingController");
 
 const router = Router();
 
@@ -15,6 +16,7 @@ router.get("/stream/:tmdbId", getStream);
 router.head("/stream/:tmdbId", getStream);
 
 router.get("/series/:tmdbId/availability", getSeriesAvailability);
+router.get("/title/:type/:tmdbId/ratings", getTitleRatings);
 
 router.options("/download/:tmdbId", (req, res) => res.status(204).end());
 router.get("/download/:tmdbId", getDownload);

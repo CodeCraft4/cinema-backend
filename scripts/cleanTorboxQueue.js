@@ -49,7 +49,27 @@ async function api(path, options = {}) {
   console.log(`Queued / stuck (safe to remove): ${removable.length}`);
   for (const t of removable.slice(0, 80)) console.log(`  ${t.id}  ${t.download_state}  ${String(t.name).slice(0, 70)}`);
 
-  if (!DELETE) return console.log("\nDry run. Re-run with --delete to remove them.");
+  const queuedRes = await api("/queued/getqueued?type=torrent");
+  const queued = Array.isArray(queuedRes?.data) ? queuedRes.data : [];
+  console.log(`\nWaiting in TorBox queue (uncached, no free slot): ${queued.length}`);
+  for (const q of queued.slice(0, 10)) console.log(`  ${q.id}  ${String(q.name).slice(0, 70)}`);
+
+  const PURGE_QUEUE = process.argv.includes("--purge-queue");
+  if (!DELETE && !PURGE_QUEUE) return console.log("\nDry run. Use --delete (stuck torrents) and/or --purge-queue (waiting list).");
+  if (PURGE_QUEUE) {
+    let purged = 0;
+    for (const q of queued) {
+      const res = await api("/queued/controlqueued", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ queued_id: q.id, operation: "delete", type: "torrent" }),
+      });
+      if (res?.success) purged++;
+      await sleep(400);
+    }
+    console.log(`Purged ${purged}/${queued.length} from the queue`);
+  }
+  if (!DELETE) return;
   let done = 0;
   for (const t of removable) {
     const res = await api("/torrents/controltorrent", {

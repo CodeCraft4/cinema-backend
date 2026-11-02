@@ -11,6 +11,8 @@
  *   node scripts/fillSeriesGaps.js --show 100088          # one TMDB show id
  *   node scripts/fillSeriesGaps.js --hide-bad bad.json    # hide rows listed as unplayable first
  *   node scripts/fillSeriesGaps.js --min-uncached-seeders 20
+ *   node scripts/fillSeriesGaps.js --upgrade-hindi        # add a Hindi / Dual release for episodes that only
+ *                                                         # have original (English) audio, e.g. The Witcher S01
  *   node scripts/fillSeriesGaps.js --add-lower            # also add small 720p/480p TorBox-cached
  *                                                         # releases (phone-friendly, fast start)
  *                                                         # for episodes that only have 1080p+
@@ -27,7 +29,7 @@ const { getSupabaseClient } = require("../server/services/supabaseClient");
 const env = require("../server/config/env");
 const torbox = require("../server/services/torboxService");
 const { fetchTorrentio } = require("../server/services/torrentioClient");
-const { hindiAudioKind, audioLabel, detectQuality, deviceCompatPenalty, episodeScope } = require("../server/services/releaseAudio");
+const { hindiAudioKind, audioLabel, detectQuality, deviceCompatPenalty, episodeScope, releaseName } = require("../server/services/releaseAudio");
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -40,6 +42,8 @@ const DRY = flag("--dry-run");
 const ONLY_SHOW = opt("--show");
 const HIDE_BAD = opt("--hide-bad");
 const ADD_LOWER = flag("--add-lower");
+const UPGRADE_HINDI = flag("--upgrade-hindi"); // episodes that only have English/original audio: find a Hindi / Dual release
+const NEW_SHOWS = (opt("--new-shows", "") || "").split(",").map((v) => v.trim()).filter(Boolean); // TMDB tv ids not in Supabase yet
 const MIN_UNCACHED_SEEDERS = Number(opt("--min-uncached-seeders", 20));
 const STREAM_BASE = (process.env.SERVER_BASE_URL || process.env.PUBLIC_BACKEND_URL || "http://168.144.249.68:4555").replace(/\/$/, "");
 const TMDB_KEY = process.env.TMDB_API_KEY || env.tmdbApiKey;
@@ -116,6 +120,12 @@ function parseStream(stream, season, episode) {
 const AAC_RE = /\baac\b|\bhe-aac\b/i;
 
 function pickBest(cands, cachedSet) {
+  if (UPGRADE_HINDI) {
+    // A cached release that really names Hindi audio; phone-friendly, not huge.
+    const pool = cands.filter((c) => c.kind && cachedSet.has(c.hash) && (!c.sizeBytes || c.sizeBytes < 3.5e9) && deviceCompatPenalty(`${c.releaseName} ${c.filename || ""}`) < 3);
+    const q = (c) => ({ "720p": 0, "480p": 1, "1080p": 2 }[c.quality] ?? 3);
+    return pool.sort((a, b) => (a.kind === "dual" ? 0 : 1) - (b.kind === "dual" ? 0 : 1) || q(a) - q(b) || deviceCompatPenalty(`${a.releaseName}`) - deviceCompatPenalty(`${b.releaseName}`) || (a.sizeBytes || 9e9) - (b.sizeBytes || 9e9))[0];
+  }
   if (ADD_LOWER) {
     // Small + cached + Hindi + phone-playable (AAC) audio: starts fast on a mobile network.
     const pool = cands.filter((c) => cachedSet.has(c.hash) && (c.quality === "720p" || c.quality === "480p") && (!c.sizeBytes || c.sizeBytes < 1.6e9) && deviceCompatPenalty(`${c.releaseName} ${c.filename || ""}`) < 3);
@@ -205,7 +215,7 @@ async function main() {
   for (let from = 0; ; from += 1000) {
     const { data, error } = await sb
       .from("media_sources")
-      .select("media_id,payload,quality")
+      .select("media_id,payload,quality,magnet_link,download_url")
       .like("media_id", "%-s%e%")
       .eq("status", "ready")
       .range(from, from + 999)
@@ -215,6 +225,7 @@ async function main() {
     if (data.length < 1000) break;
   }
   const have = new Map(); // showId -> Set("s:e")
+  const hindiHave = new Map(); // showId -> Set("s:e") that already has a Hindi / Dual row
   const lowHave = new Map(); // showId -> Set("s:e") that already has a 720p / 480p row
   const templates = new Map();
   for (const r of rows) {
@@ -222,6 +233,10 @@ async function main() {
     if (!m) continue;
     if (!have.has(m[1])) have.set(m[1], new Set());
     have.get(m[1]).add(`${+m[2]}:${+m[3]}`);
+    if (hindiAudioKind(releaseName(r), r.payload?.original_language)) {
+      if (!hindiHave.has(m[1])) hindiHave.set(m[1], new Set());
+      hindiHave.get(m[1]).add(`${+m[2]}:${+m[3]}`);
+    }
     if (/^(720p|480p|360p)$/.test(String(r.quality))) {
       if (!lowHave.has(m[1])) lowHave.set(m[1], new Set());
       lowHave.get(m[1]).add(`${+m[2]}:${+m[3]}`);
@@ -232,11 +247,37 @@ async function main() {
     }
   }
 
+  // Brand-new shows (--new-shows): add the catalog row, then every aired episode counts as missing.
+  for (const id of NEW_SHOWS) {
+    if (have.has(id)) continue;
+    const info = await tmdb(`/tv/${id}`);
+    if (!info) continue;
+    const poster = info.poster_path ? `https://image.tmdb.org/t/p/w500${info.poster_path}` : null;
+    const backdrop = info.backdrop_path ? `https://image.tmdb.org/t/p/w1280${info.backdrop_path}` : null;
+    have.set(id, new Set());
+    templates.set(id, { poster_url: poster, backdrop_url: backdrop, series_poster_url: poster, rating: Math.round((info.vote_average || 0) * 10), original_language: info.original_language });
+    if (!DRY) {
+      await sb.from("media_content").upsert(
+        [{
+          external_id: Number(id), source: "tmdb", media_type: "tv", title: info.name,
+          details: {
+            id: Number(id), name: info.name, title: info.name, year: String(info.first_air_date || "").slice(0, 4),
+            overview: info.overview || "", genre_ids: (info.genres || []).map((g) => g.id),
+            poster_url: poster, poster_path: info.poster_path, backdrop_url: backdrop, backdrop_path: info.backdrop_path,
+            first_air_date: info.first_air_date, vote_average: info.vote_average, original_language: info.original_language,
+          },
+        }],
+        { onConflict: "source,media_type,external_id" }
+      );
+    }
+  }
+
   const today = new Date().toISOString().slice(0, 10);
-  const shows = [...have.keys()].filter((id) => !ONLY_SHOW || id === String(ONLY_SHOW));
+  const shows = [...have.keys()].filter((id) => (!ONLY_SHOW || id === String(ONLY_SHOW)) && (!NEW_SHOWS.length || NEW_SHOWS.includes(id)));
   const report = { shows: [], inserted: 0, uncachedInserted: 0, notFound: [] };
 
   for (const showId of shows) {
+   try {
     const info = await tmdb(`/tv/${showId}`);
     if (!info) continue;
     const ext = await tmdb(`/tv/${showId}/external_ids`);
@@ -248,7 +289,7 @@ async function main() {
       const sd = await tmdb(`/tv/${showId}/season/${s.season_number}`);
       for (const e of sd?.episodes || []) {
         const k = `${s.season_number}:${e.episode_number}`;
-        const wanted = ADD_LOWER ? have.get(showId).has(k) && !lowHave.get(showId)?.has(k) : !have.get(showId).has(k);
+        const wanted = UPGRADE_HINDI ? have.get(showId).has(k) && !hindiHave.get(showId)?.has(k) : ADD_LOWER ? have.get(showId).has(k) && !lowHave.get(showId)?.has(k) : !have.get(showId).has(k);
         if (e.air_date && e.air_date <= today && wanted) {
           missing.push({ season: s.season_number, episode: e.episode_number, info: e });
         }
@@ -283,7 +324,7 @@ async function main() {
     for (const p of perEp) {
       const best = pickBest(p.cands, cachedSet);
       const isCached = best ? cachedSet.has(best.hash) : false;
-      if (!best || (!ADD_LOWER && !isCached && best.seeders < MIN_UNCACHED_SEEDERS)) {
+      if (!best || (!ADD_LOWER && !UPGRADE_HINDI && !isCached && best.seeders < MIN_UNCACHED_SEEDERS)) {
         report.notFound.push({ showId, name: info.name, season: p.season, episode: p.episode, reason: best ? `uncached, ${best.seeders} seeders` : "no release" });
         continue;
       }
@@ -303,6 +344,10 @@ async function main() {
     report.inserted += toInsert.length;
     report.uncachedInserted += toInsert.length - cachedN;
     fs.writeFileSync(REPORT, JSON.stringify(report, null, 1));
+   } catch (err) {
+    // A dropped connection must not stop the whole run: log it and go on with the next show.
+    console.warn(`  show ${showId}: skipped after error: ${err.message}`);
+   }
   }
 
   console.log(`\nDone. inserted=${report.inserted} (uncached ${report.uncachedInserted}), not found=${report.notFound.length}${DRY ? " [dry run]" : ""}`);
