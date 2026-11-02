@@ -119,7 +119,10 @@ function parseStream(stream, season, episode) {
 
 const AAC_RE = /\baac\b|\bhe-aac\b/i;
 
-function pickBest(cands, cachedSet) {
+function pickBest(cands, cachedSet, hindiOriginal = false) {
+  // Supabase only keeps Hindi / Dual audio: a release that does not name Hindi is never stored.
+  if (!hindiOriginal) cands = cands.filter((c) => c.kind);
+  else cands = cands.map((c) => (c.kind ? c : { ...c, kind: "hindi" }));
   if (UPGRADE_HINDI) {
     // A cached release that really names Hindi audio; phone-friendly, not huge.
     const pool = cands.filter((c) => c.kind && cachedSet.has(c.hash) && (!c.sizeBytes || c.sizeBytes < 3.5e9) && deviceCompatPenalty(`${c.releaseName} ${c.filename || ""}`) < 3);
@@ -322,7 +325,7 @@ async function main() {
     // 3. Choose + insert
     const toInsert = [];
     for (const p of perEp) {
-      const best = pickBest(p.cands, cachedSet);
+      const best = pickBest(p.cands, cachedSet, info.original_language === "hi" || info.original_language === "ur");
       const isCached = best ? cachedSet.has(best.hash) : false;
       if (!best || (!ADD_LOWER && !UPGRADE_HINDI && !isCached && best.seeders < MIN_UNCACHED_SEEDERS)) {
         report.notFound.push({ showId, name: info.name, season: p.season, episode: p.episode, reason: best ? `uncached, ${best.seeders} seeders` : "no release" });

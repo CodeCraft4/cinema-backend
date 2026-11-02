@@ -204,6 +204,7 @@ async function discover(type, lang, page) {
 }
 
 async function ingestMovies(sb, lang, need, known) {
+  const hindiOriginal = lang === "hi" || lang === "ur"; // a Hindi film's own audio is Hindi
   let added = 0;
   const report = { checked: 0, added: 0, rows: 0, skipped: 0 };
   for (let page = 1; page <= 25 && added < Math.min(need, MAX_NEW_PER_RUN); page++) {
@@ -220,16 +221,17 @@ async function ingestMovies(sb, lang, need, known) {
           continue;
         }
         const streams = (await fetchTorrentio(`movie/${ext.imdb_id}`)).streams || [];
-        const cands = streams.map(parseMovieStream).filter(Boolean);
+        const cands = streams.map(parseMovieStream).filter(Boolean).map((c) => (hindiOriginal && !c.kind ? { ...c, kind: "hindi" } : c));
         const cachedSet = cands.length ? await checkCached([...new Set(cands.map((c) => c.hash))]) : new Set();
-        // Hindi / Dual first; if the industry has none, original audio is accepted.
+        // Hindi / Dual only.
         const rows = [];
         const year = String(m.release_date || "").slice(0, 4);
         const poster = m.poster_path ? `https://image.tmdb.org/t/p/w500${m.poster_path}` : null;
         const backdrop = m.backdrop_path ? `https://image.tmdb.org/t/p/w1280${m.backdrop_path}` : null;
         const usedHashes = new Set();
         for (const tier of TIERS) {
-          const pick = bestForTier(cands.filter((c) => !usedHashes.has(`${c.hash}`)), cachedSet, tier, false);
+          // Only Hindi / Dual (Hindi + English or Original + Hindi) releases are stored.
+          const pick = bestForTier(cands.filter((c) => !usedHashes.has(`${c.hash}`)), cachedSet, tier, !hindiOriginal);
           if (pick) {
             usedHashes.add(pick.hash);
             rows.push(movieRow({ id: m.id, title: m.title, vote_average: m.vote_average, original_language: m.original_language }, year, pick, tier, poster, backdrop));
