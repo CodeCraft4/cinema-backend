@@ -340,8 +340,11 @@ const getStream = asyncHandler(async (req, res) => {
     streamUrl: directStreamUrl,
     error: hasStream ? null : "No stream available for this title yet.",
     torrentMagnet: torrentMagnet || null,
-    // Only native, directly playable sources. No embed / third-party player servers.
     backupStreams: [],
+    // Cloud pages the app falls back to (hidden sniffer -> native player) when the TorBox file is slow
+    // to start or cannot be decoded on the phone (10-bit / HEVC / E-AC3 / REMUX).
+    fallbackStreams: hasStream ? buildFallbackStreams(tmdbId, mediaType, season, episode) : [],
+    deviceRisk: Boolean(resolved && deviceCompatPenalty(resolved.cand.name) >= 3),
     defaultAudio: "hi",
     availableAudios: [
       { label: "Hindi", code: "hi" },
