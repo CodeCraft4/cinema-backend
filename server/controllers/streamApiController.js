@@ -115,7 +115,7 @@ function directRowUrl(row) {
  * For Hindi requests the file's own track list is read: a file whose Hindi track is
  * AC3/DTS (silent on most phones, so English plays) is kept only as a last resort.
  */
-async function resolveFirstPlayable(candidates, { season, episode, isTv, hindi = false }) {
+async function resolveFirstPlayable(candidates, { season, episode, isTv, hindi = false, anyCodec = false }) {
   let attempts = 0;
   let silentHindiFallback = null;
   for (const cand of candidates) {
@@ -140,6 +140,8 @@ async function resolveFirstPlayable(candidates, { season, episode, isTv, hindi =
       if (!hindi) return resolved;
       resolved.audioProbe = await probeHindiAudio(tb.streamUrl, tb.fileName);
       if (!resolved.audioProbe || resolved.audioProbe.hindiPlayable) return resolved;
+      // The app plays through libVLC, which decodes any codec: a file that has a Hindi track is fine as is.
+      if (anyCodec && resolved.audioProbe.hindi.length > 0) return resolved;
       // H.264 video with a Hindi track the phone cannot decode (AC3 / E-AC3 / DTS): the server
       // converts just that audio to AAC (video copied), so the file plays instead of erroring.
       const probe = resolved.audioProbe;
@@ -236,7 +238,8 @@ const getStream = asyncHandler(async (req, res) => {
   res.header("Content-Type", "application/json; charset=utf-8");
 
   // Step 1: Check In-Memory Cache (1-Hour TTL) to prevent DB over-limit
-  const cacheKey = `stream:${tmdbId}:${mediaType}:${season}:${episode}:${audio}:${quality}`;
+  const anyCodec = String(req.query.engine || "").toLowerCase() === "vlc";
+  const cacheKey = `stream:${tmdbId}:${mediaType}:${season}:${episode}:${audio}:${quality}${anyCodec ? ":vlc" : ""}`;
   const cachedStream = memoryCache.get(cacheKey);
   if (cachedStream) {
     return res.json({ ...cachedStream, cached: true });
@@ -261,7 +264,7 @@ const getStream = asyncHandler(async (req, res) => {
       if (hindiMissing) {
         candidates = rankCandidates(rows, { mediaType, season, episode, audio: "any", quality, qualityOrder: STREAM_QUALITY_ORDER });
       }
-      resolved = await resolveFirstPlayable(candidates, { season, episode, isTv, hindi: wantsHindiAudio(audio) && !hindiMissing });
+      resolved = await resolveFirstPlayable(candidates, { season, episode, isTv, hindi: wantsHindiAudio(audio) && !hindiMissing, anyCodec });
       if (resolved) {
         directStreamUrl = resolved.streamUrl;
         directDownloadUrl = resolved.downloadUrl;
@@ -356,7 +359,7 @@ const getStream = asyncHandler(async (req, res) => {
     // Cloud pages the app falls back to (hidden sniffer -> native player) when the TorBox file is slow
     // to start or cannot be decoded on the phone (10-bit / HEVC / E-AC3 / REMUX).
     fallbackStreams: hasStream ? buildFallbackStreams(tmdbId, mediaType, season, episode) : [],
-    deviceRisk: Boolean(resolved && !resolved.remux && deviceCompatPenalty(resolved.cand.name) >= 3),
+    deviceRisk: Boolean(resolved && !anyCodec && !resolved.remux && deviceCompatPenalty(resolved.cand.name) >= 3),
     remuxed: Boolean(resolved && resolved.remux),
     defaultAudio: "hi",
     availableAudios: [
