@@ -192,6 +192,22 @@ function describeCandidate(cand, resolved) {
  * 3. GET /api/download/:tmdbId
  */
 
+/**
+ * Cloud fallback pages (only sent while TorBox is still caching a title). The app opens one in a
+ * hidden WebView, intercepts the real .m3u8 / .mp4 and plays it in the NATIVE player; it switches
+ * to TorBox as soon as TorBox is ready.
+ */
+function buildFallbackStreams(tmdbId, mediaType, season = 1, episode = 1) {
+  const isTv = mediaType === "tv";
+  const id = encodeURIComponent(tmdbId);
+  return [
+    { name: "Cloud 1", url: isTv ? `https://vidsrc.to/embed/tv/${id}/${season}/${episode}` : `https://vidsrc.to/embed/movie/${id}` },
+    { name: "Cloud 2", url: isTv ? `https://vidlink.pro/tv/${id}/${season}/${episode}?autoplay=true` : `https://vidlink.pro/movie/${id}?autoplay=true` },
+    { name: "Cloud 3", url: isTv ? `https://multiembed.mov/?video_id=${id}&tmdb=1&s=${season}&e=${episode}` : `https://multiembed.mov/?video_id=${id}&tmdb=1` },
+    { name: "Cloud 4", url: isTv ? `https://www.2embed.cc/embedtv/${id}&s=${season}&e=${episode}` : `https://www.2embed.cc/embed/${id}` },
+  ];
+}
+
 const getStream = asyncHandler(async (req, res) => {
   const { tmdbId } = req.params;
   const mediaType = req.query.mediaType === "tv" ? "tv" : "movie";
@@ -290,6 +306,8 @@ const getStream = asyncHandler(async (req, res) => {
           message,
           retryAfterSeconds: 8,
           streamUrl: null,
+          // Played natively (via the app's hidden sniffer) while TorBox finishes caching.
+          fallbackStreams: buildFallbackStreams(tmdbId, mediaType, season, episode),
           backupStreams: [],
           error: message,
         });
