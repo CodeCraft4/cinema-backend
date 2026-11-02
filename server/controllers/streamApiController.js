@@ -250,6 +250,53 @@ const getStream = asyncHandler(async (req, res) => {
     }
   }
 
+  // Step 2b: TorBox has not cached it yet. Start caching it now (only for a title a user opened)
+  // and tell the app to wait: it polls this endpoint and starts the stream as soon as it is ready.
+  if (!directStreamUrl && candidates.length) {
+    // Try the best-ranked releases in turn: a dead swarm (stalled) moves on to the next release.
+    let st = { state: "error" };
+    const tried = new Set();
+    for (const c of candidates) {
+      const magnet = candidateMagnet(c.row);
+      const hash = magnet && torboxService.extractInfoHash(magnet);
+      if (!magnet || !hash || tried.has(hash)) continue;
+      if (tried.size >= 3) break;
+      tried.add(hash);
+      st = await torboxService.ensureCaching(magnet).catch(() => ({ state: "error" }));
+      if (st.state !== "stalled") break;
+    }
+    {
+      if (st.state === "ready") {
+        resolved = await resolveFirstPlayable(candidates, { season, episode, isTv, hindi: false });
+        if (resolved) {
+          directStreamUrl = resolved.streamUrl;
+          directDownloadUrl = resolved.downloadUrl;
+          torrentMagnet = candidateMagnet(resolved.cand.row);
+        }
+      } else if (st.state === "caching" || st.state === "busy" || st.state === "stalled") {
+        const message =
+          st.state === "busy"
+            ? "Servers are busy preparing other movies. Please try again in a minute."
+            : st.state === "stalled"
+              ? "This movie is taking longer than usual to prepare. Please try again in a few minutes."
+              : "Preparing this movie for you. Please wait 1-2 minutes.";
+        return res.json({
+          success: false,
+          available: true,
+          caching: true,
+          state: st.state,
+          progress: st.progress ?? 0,
+          etaSeconds: st.etaSeconds ?? null,
+          message,
+          retryAfterSeconds: 8,
+          streamUrl: null,
+          backupStreams: [],
+          error: message,
+        });
+      }
+    }
+  }
+
   // Step 3: TorBox could not serve it (not cached yet / busy). Fall back to this server's own
   // torrent engine, which ExoPlayer plays natively. Web embed pages ("cloud player") are never served.
   if (!directStreamUrl) {

@@ -306,6 +306,80 @@ async function getPackFiles(magnet) {
   return pack;
 }
 
+// ── On-demand caching: a title TorBox has not cached yet is added when a user opens it ──────
+const warming = new Map(); // info hash -> { torrentId, at }
+const MAX_WARMING = 3; // = TorBox active download slots: more would only sit in its waiting queue
+const WARM_STALE_MS = 30 * 60 * 1000;
+
+function activeWarmCount() {
+  const now = Date.now();
+  for (const [hash, w] of warming) if (now - w.at > WARM_STALE_MS) warming.delete(hash);
+  return warming.size;
+}
+
+/**
+ * Ask TorBox to cache a magnet the user wants to watch, and report how far it is.
+ * state: "ready" (cached, play it) | "caching" (progress 0..1) | "busy" | "stalled" | "error"
+ */
+async function ensureCaching(magnet) {
+  const apiKey = getApiKey();
+  const hash = extractInfoHash(magnet);
+  if (!apiKey || !hash) return { state: "error" };
+
+  if (memoryCache.get(`torbox:dead:${hash}`)) return { state: "stalled" }; // dead swarm: never re-add it
+  const known = warming.get(hash);
+  if (!known) {
+    // Cached after all (e.g. another user's request finished it)?
+    if ((await checkCached(hash)) === true) return { state: "ready" };
+    if (activeWarmCount() >= MAX_WARMING) return { state: "busy" };
+    const created = await createTorrent(magnet);
+    if (!created || !created.torrent_id) return { state: "error" };
+    warming.set(hash, { torrentId: created.torrent_id, at: Date.now() });
+    return { state: "caching", progress: 0 };
+  }
+
+  // Already added: read its live status (no cache).
+  const { json } = await tbRequest(
+    `${TORBOX_BASE_URL}/torrents/mylist?id=${known.torrentId}&bypass_cache=true`,
+    { headers: { Authorization: `Bearer ${apiKey}` } },
+    5000
+  );
+  const item = json?.success ? (Array.isArray(json.data) ? json.data[0] : json.data) : null;
+  if (!item) {
+    warming.delete(hash);
+    return { state: "error" };
+  }
+  if (item.cached || item.download_present || item.progress === 1) {
+    warming.delete(hash);
+    memoryCache.set(`torbox:cached:${hash}`, "yes", 60 * 60 * 1000);
+    return { state: "ready" };
+  }
+  const stateText = String(item.download_state || "").toLowerCase();
+  const waitedMs = Date.now() - known.at;
+  if (/stalled|failed|error/.test(stateText) || (waitedMs > 4 * 60 * 1000 && !(item.progress > 0))) {
+    // Dead swarm: remove the torrent we added so its slot is free for the next movie.
+    warming.delete(hash);
+    await tbRequest(
+      `${TORBOX_BASE_URL}/torrents/controltorrent`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ torrent_id: known.torrentId, operation: "delete" }),
+      },
+      5000
+    ).catch(() => null);
+    memoryCache.set(`torbox:cached:${hash}`, "no", 30 * 60 * 1000);
+    memoryCache.set(`torbox:dead:${hash}`, true, 6 * 60 * 60 * 1000);
+    return { state: "stalled", progress: Number(item.progress) || 0 };
+  }
+  return {
+    state: "caching",
+    progress: Number(item.progress) || 0,
+    etaSeconds: Number(item.eta) > 0 ? Number(item.eta) : null,
+    seeds: Number(item.seeds) || 0,
+  };
+}
+
 /**
  * High-Level Orchestrator:
  * Resolves a BitTorrent Magnet Link into an instant high-speed HTTPS Stream & Download URL.
@@ -380,6 +454,7 @@ module.exports = {
   createTorrent,
   getTorrentFiles,
   getPackFiles,
+  ensureCaching,
   requestDownloadLink,
   resolveDirectTorboxStream,
   extractInfoHash,
