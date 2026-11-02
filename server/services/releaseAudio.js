@@ -88,6 +88,10 @@ function deviceCompatPenalty(name) {
   const text = String(name || "");
   let penalty = 0;
   if (HARD_VIDEO_RE.test(text) || HARD_AUDIO_RE.test(text)) penalty += 3;
+  // REMUX = untouched disc video + lossless / AC3 audio, 20+ Mbps: heavy on a mobile network.
+  if (/\bremux\b/i.test(text)) penalty += 2;
+  // Dolby Digital Plus (E-AC3) is not decoded by many phones: only an AAC release is safe.
+  if (/\b(ddp|dd\+|e-?ac-?3)\b/i.test(text)) penalty += 1;
   if (/\b(hevc|x265|h[ .]?265)\b/i.test(text)) penalty += 1;
   else if (/\b(x264|h[ .]?264|avc)\b/i.test(text)) penalty -= 1;
   return penalty;
